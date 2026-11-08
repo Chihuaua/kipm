@@ -4,7 +4,7 @@
    Adventshaus · Projektmanager: Oberfläche mit Demo- und Echtbetrieb
    ============================================================ */
 
-var GUI_VERSION = "23.42.01";
+var GUI_VERSION = "23.42.03";
 var EROEFFNUNG = "Repository: https://github.com/Chihuaua/adventshaus – Stand: main\n" +
 "Lies README.md komplett, besonders „Grundsätze“, „Arbeitsablauf mit KI-Assistenten“ und „Regel 0“. Halte dich daran.\n\n" +
 "Regel 0: Klone den Stand und führe ihn aus – baue ihn nicht nach. Ändere nichts, was ich nicht verlange: keine Texte, Erklärungen, Buttons, Styles oder Größen hinzufügen oder anpassen. Nur die Aufgabe unten.\n\n" +
@@ -240,7 +240,7 @@ var ZUSTAND = {
   modus:"demo", helperVersion:null, ordner:null, tokenVorhanden:false, githubMain:"",
   cfg:{projekt:"~/projekte/adventshaus", sicherung:"~/sicherung/adventshaus.git", kennung:"KI-B", spiel_url:"http://localhost:5173/"},
   kette:null, erledigt:{}, laeuft:false, token:0, override:null, versionKonflikt:false,
-  log:[], ampel:"gelb", bericht:null, controller:null, patchHinweis:""
+  log:[], ampel:"gelb", bericht:null, controller:null, patchHinweis:"", patchArchiv:null
 };
 
 /* Logische Reihenfolge: prüfen -> lokal speichern -> Postfach -> KI-Übergabe -> PR -> nach Hause -> Spiel */
@@ -761,14 +761,16 @@ function patchPruefe(){
   var patch=$("#patchText").value, meta=$("#patchMeta").value;
   var hatDiff=/(^|\n)diff --git /.test(patch), basis="";
   try{basis=String(JSON.parse(meta).basis || "").trim();}catch(e){basis="";}
-  var voll=hatDiff && !!basis, info=$("#patchInfo");
+  var voll=(hatDiff && !!basis) || !!ZUSTAND.patchArchiv, info=$("#patchInfo");
   info.className="paste-info "+(voll?"ok":"bad");
-  if (!patch.trim() && !meta.trim()) info.textContent="Noch nichts eingefügt.";
+  if (ZUSTAND.patchArchiv) info.textContent="Patch-ZIP bereit: wird beim Eintragen binärgenau geprüft.";
+  else if (!patch.trim() && !meta.trim()) info.textContent="Noch nichts eingefügt.";
   else info.textContent=(hatDiff?"Patch-Format erkannt ✓":"Es fehlt „diff --git“ am Zeilenanfang")+" · "+(basis?"Basis "+basis+" ✓":"json mit lesbarer Basis fehlt (Pflicht)");
   $("#patchOk").disabled=!voll;
 }
 function patchOeffnen(hinweis){
   ZUSTAND.patchHinweis=hinweis || "";
+  ZUSTAND.patchArchiv=null;
   $("#patchText").value=""; $("#patchMeta").value=""; $("#patchUrl").value="";
   $("#patchDateiName").textContent="keine Datei gewählt";
   $("#patchModus").textContent=ZUSTAND.modus==="echt" ? "Echtbetrieb: Der Helfer prüft und schreibt ins GitHub-Gist. Das Token bleibt lokal." : "Demo: Eingabe wird geprüft, aber nur simuliert – es wird nichts ins Postfach geschrieben.";
@@ -780,7 +782,7 @@ function patchOeffnen(hinweis){
 function patchSchliessen(){ $("#patchDialog").classList.add("hidden"); }
 function patchSenden(){
   if ($("#patchOk").disabled) return;
-  var daten={patch:$("#patchText").value,meta:$("#patchMeta").value},hinweis=ZUSTAND.patchHinweis;
+  var daten=ZUSTAND.patchArchiv?{archiv:ZUSTAND.patchArchiv}:{patch:$("#patchText").value,meta:$("#patchMeta").value},hinweis=ZUSTAND.patchHinweis;
   patchSchliessen();
   if (ZUSTAND.modus==="echt") starteEcht("eintragen",hinweis,{daten:daten});
   else starteAktion("eintragen",hinweis);
@@ -1379,6 +1381,24 @@ function init(){
   $("#patchDateiKnopf").addEventListener("click", function(){$("#patchDatei").click();});
   $("#patchDatei").addEventListener("change", function(e){
     var f=e.target.files && e.target.files[0]; if (!f) return;
+    var name=String(f.name||"").toLowerCase();
+    if (name.endsWith(".zip") || f.type==="application/zip" || f.type==="application/x-zip-compressed"){
+      if (f.size>16*1024*1024){ $("#patchDateiName").textContent="ZIP zu groß (maximal 16 MiB)."; return; }
+      var zr=new FileReader();
+      zr.onload=function(){
+        try{
+          var bytes=new Uint8Array(zr.result), bin="";
+          for(var i=0;i<bytes.length;i+=8192){ bin+=String.fromCharCode.apply(null, bytes.subarray(i,i+8192)); }
+          ZUSTAND.patchArchiv=btoa(bin);
+          $("#patchText").value=""; $("#patchMeta").value="";
+          $("#patchDateiName").textContent="ZIP gelesen: "+f.name;
+          patchPruefe();
+        }catch(err){ $("#patchDateiName").textContent="ZIP konnte nicht gelesen werden."; }
+      };
+      zr.onerror=function(){$("#patchDateiName").textContent="ZIP konnte nicht gelesen werden.";};
+      zr.readAsArrayBuffer(f); e.target.value=""; return;
+    }
+    ZUSTAND.patchArchiv=null;
     var fr=new FileReader();
     fr.onload=function(){
       var text=String(fr.result || "");

@@ -30,9 +30,9 @@ GIST_URL = "https://gist.github.com/Chihuaua/" + GIST_ID
 REPO_URL = "https://github.com/Chihuaua/adventshaus"
 CONFIG = os.path.join(HERE, "einstellungen.json")
 PID_FILE = os.path.join(HERE, "projektmanager.pid")
-HELPER_VERSION = "23.42.01"
-GUI_HINT = "23.42.01"
-HELPER_REVISION = "23.42.01"
+HELPER_VERSION = "23.42.03"
+GUI_HINT = "23.42.03"
+HELPER_REVISION = "23.42.03"
 import io
 import ipaddress
 import shlex
@@ -295,6 +295,44 @@ def _gist_schreiben(files, token):
                                    "Postfach prüfen. Kein erfolgreicher Upload bestätigt.")
     return body
 
+def _patch_zip_aus_archiv(archiv):
+    import base64
+    if not isinstance(archiv, str) or not archiv.strip():
+        raise ValueError("Leeres Patch-ZIP.")
+    raw = base64.b64decode(archiv.strip(), validate=True)
+    if len(raw) > MAX_HTTP_BYTES:
+        raise ValueError("Patch-ZIP überschreitet 16 MiB.")
+    found = {}
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        for entry in archive.infolist():
+            if entry.is_dir():
+                continue
+            parts = entry.filename.split("/")
+            name = parts[-1]
+            if len(parts) > 2 or name not in ("aktuell.patch", "aktuell.json") or name in found:
+                raise ValueError("Patch-ZIP muss genau aktuell.patch und aktuell.json enthalten.")
+            if entry.file_size > (MAX_PATCH_BYTES if name.endswith("patch") else 65536):
+                raise ValueError("Patch-ZIP enthält eine zu große Datei.")
+            found[name] = archive.read(entry).decode("utf-8")
+    if set(found) != {"aktuell.patch", "aktuell.json"}:
+        raise ValueError("Patch-ZIP ist unvollständig.")
+    return found["aktuell.patch"], found["aktuell.json"]
+
+def _patch_bereits_auf_main(proj, remote, patch, token):
+    if not remote or _ist_mail_patch(patch):
+        return False
+    temp = tempfile.TemporaryDirectory(prefix="projektmanager-reverse-test-")
+    added = run(["git", "worktree", "add", "--detach", temp.name, remote], cwd=proj, token=token)
+    if not added["ok"]:
+        temp.cleanup()
+        return False
+    try:
+        check = run(["git", "apply", "--reverse", "--check", "-"], cwd=temp.name, input_text=patch, token=token)
+        return check["ok"]
+    finally:
+        run(["git", "worktree", "remove", "--force", temp.name], cwd=proj, token=token)
+        temp.cleanup()
+
 def _patch_meta_fehler(patch, meta):
     if not isinstance(meta, dict):
         return "aktuell.json muss ein JSON-Objekt sein."
@@ -455,6 +493,29 @@ def _postfach_meta(data):
     except Exception:
         meta = {}
     return patch, meta
+
+def _postfach_vergleich(patch, meta, old_patch, old_meta, allow_override=False):
+    old_meta = old_meta if isinstance(old_meta, dict) else {}
+    if not old_patch and not old_meta:
+        return None
+    new_sha = hashlib.sha256(patch.encode("utf-8")).hexdigest()[:16]
+    old_sha = hashlib.sha256(old_patch.encode("utf-8")).hexdigest()[:16] if old_patch else "–"
+    new_basis = str(meta.get("basis") or "").strip().lower()
+    old_basis = str(old_meta.get("basis") or "").strip().lower()
+    if old_patch == patch and old_basis == new_basis:
+        return {"ok": True, "info": True,
+                "out": "Identischer Patch liegt bereits im Postfach (Prüfsumme %s, Basis %s). Nichts geändert." % (new_sha, new_basis[:7])}
+    if old_patch == patch:
+        result = {"ok": False,
+                  "out": "Patch-Datei ist inhaltsgleich, aber die Basis weicht ab: Postfach %s, neu %s. Nicht überschrieben." % (old_basis[:7] or "–", new_basis[:7] or "–"),
+                  "loesung": "Metadaten/Basis prüfen; keinen identischen Patch mit abweichender Basis stillschweigend ersetzen."}
+    else:
+        result = {"ok": False,
+                  "out": "Postfach enthält einen anderen Patch: alte Prüfsumme %s, Basis %s; neuer Patch Prüfsumme %s, Basis %s. Nicht überschrieben." % (old_sha, old_basis[:7] or "–", new_sha, new_basis[:7] or "–"),
+                  "loesung": "Alten Patch entfernen oder ausdrücklich Überschreiben bestätigen."}
+    if allow_override:
+        result["ueberschreiben"] = True
+    return result
 
 def _erlaubte_adresse(url, raw_only=False):
     parsed = urllib.parse.urlparse(url)
@@ -671,15 +732,6 @@ def act_ablegen(payload=None):
         return {"ok": False, "out": "Divergenz: lokal %s voraus, GitHub %s voraus. Nichts abgelegt." % (ahead, behind)}
     if not ahead:
         return {"ok": True, "info": True, "out": "Nichts abgelegt – keine lokalen Commits vor GitHub-main."}
-    if not payload.get("force"):
-        try:
-            old_patch, old_meta = _postfach_meta(_gist_lesen(token))
-            if old_patch or old_meta:
-                return {"ok": False, "ueberschreiben": True,
-                        "out": "Postfach belegt: %s, Basis %s." % (old_meta.get("titel", "unbekannt"), old_meta.get("basis", "?")),
-                        "loesung": "Alten Patch entfernen oder ausdrücklich „Trotzdem überschreiben“ wählen."}
-        except GistRequestError as exc:
-            return {"ok": False, "out": exc.out, "loesung": exc.loesung}
     generated = run(["git", "format-patch", remote + "..HEAD", "--stdout"], cwd=proj, token=token,
                     limit=None, preserve=True)
     if not generated["ok"] or not generated["out"]:
@@ -694,6 +746,14 @@ def act_ablegen(payload=None):
     error = _patch_meta_fehler(patch, meta) or _patch_parse_check(patch, proj, token)
     if error:
         return error if isinstance(error, dict) else {"ok": False, "out": error}
+    if not payload.get("force"):
+        try:
+            old_patch, old_meta = _postfach_meta(_gist_lesen(token))
+            duplicate = _postfach_vergleich(patch, meta, old_patch, old_meta, allow_override=True)
+            if duplicate:
+                return duplicate
+        except GistRequestError as exc:
+            return {"ok": False, "out": exc.out, "loesung": exc.loesung}
     try:
         _gist_schreiben({"aktuell.patch": {"content": patch}, "aktuell.json": {"content": json.dumps(meta, ensure_ascii=False)}}, token)
     except GistRequestError as exc:
@@ -1204,8 +1264,15 @@ def act_patch_einfuegen(payload):
     token = read_token()
     if not token:
         return _token_fehlt()
-    patch = payload.get("patch") or ""
-    meta_text = str(payload.get("meta") or "").strip()
+    if payload.get("archiv"):
+        try:
+            patch, meta_text = _patch_zip_aus_archiv(payload["archiv"])
+        except Exception as exc:
+            return {"ok": False, "out": "Patch-ZIP nicht lesbar: " + str(exc)[:160],
+                    "loesung": "ZIP mit genau aktuell.patch und aktuell.json wählen; keine Textumwandlung."}
+    else:
+        patch = payload.get("patch") or ""
+        meta_text = str(payload.get("meta") or "").strip()
     if len(meta_text.encode("utf-8")) > 65536:
         return {"ok": False, "out": "aktuell.json ist zu groß (maximal 64 KiB)."}
     try:
@@ -1222,14 +1289,17 @@ def act_patch_einfuegen(payload):
     error = _patch_parse_check(patch, proj, token)
     if error:
         return error
-    _, basis_error = _basis_gleich(meta, proj, token)
+    remote, basis_error = _basis_gleich(meta, proj, token)
     if basis_error:
+        if remote and _patch_bereits_auf_main(proj, remote, patch, token):
+            return {"ok": True, "info": True,
+                    "out": "Patch-Inhalt ist bereits in GitHub-main %s enthalten; nicht erneut eingetragen." % remote[:7]}
         return basis_error
     try:
         old_patch, old_meta = _postfach_meta(_gist_lesen(token))
-        if old_patch or old_meta:
-            return {"ok": False, "out": "Postfach bereits belegt – eingehender Patch nicht überschrieben.",
-                    "loesung": "Unter Wartung „Alten Patch entfernen“ verwenden, danach erneut eintragen."}
+        duplicate = _postfach_vergleich(patch, meta, old_patch, old_meta, allow_override=False)
+        if duplicate:
+            return duplicate
         _gist_schreiben({"aktuell.patch": {"content": patch}, "aktuell.json": {"content": json.dumps(meta, ensure_ascii=False)}}, token)
     except GistRequestError as exc:
         return {"ok": False, "out": exc.out, "loesung": exc.loesung}
