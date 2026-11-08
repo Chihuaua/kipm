@@ -4,12 +4,23 @@
    Adventshaus · Projektmanager: Oberfläche mit Demo- und Echtbetrieb
    ============================================================ */
 
-var GUI_VERSION = "23.42";
+var GUI_VERSION = "23.42.01";
 var EROEFFNUNG = "Repository: https://github.com/Chihuaua/adventshaus – Stand: main\n" +
 "Lies README.md komplett, besonders „Grundsätze“, „Arbeitsablauf mit KI-Assistenten“ und „Regel 0“. Halte dich daran.\n\n" +
 "Regel 0: Klone den Stand und führe ihn aus – baue ihn nicht nach. Ändere nichts, was ich nicht verlange: keine Texte, Erklärungen, Buttons, Styles oder Größen hinzufügen oder anpassen. Nur die Aufgabe unten.\n\n" +
 "Ablauf: 1) klonen, npm ci, npx tsc --noEmit, npm run build – bestätige, dass es baut. 2) Frag mich nach dem Postfach-Token (ich schicke es in zwei Hälften). 3) Setze die Aufgabe um und zeig sie mir lauffähig. 4) Erst nach meinem „ja“: Patch + Prüfsumme ins Postfach. Ich übernehme per Knopf.\n\n" +
 "Aufgabe: Noch keine. Klone den Stand, zeig ihn mir unverändert, frag nach dem Token – dann sage ich dir, was zu tun ist.";
+
+function versionsVergleich(a,b){
+  var links=String(a||"").split("."),rechts=String(b||"").split(".");
+  for(var i=0;i<Math.max(links.length,rechts.length);i++){
+    var x=parseInt(links[i]||"0",10),y=parseInt(rechts[i]||"0",10);
+    if(!isFinite(x)||!isFinite(y)) return 0;
+    if(x>y) return 1;
+    if(x<y) return -1;
+  }
+  return 0;
+}
 
 var API = {
   pruefbericht:{method:"GET", pfad:"/api/pruefen"},
@@ -1018,8 +1029,8 @@ async function detecteModus(){
     if (j.cfg) Object.keys(ZUSTAND.cfg).forEach(function(k){if (j.cfg[k]!=null) ZUSTAND.cfg[k]=j.cfg[k];});
     aktualisiereFussPfade();
     if (ZUSTAND.versionKonflikt){
-      var a=parseFloat(ZUSTAND.helperVersion),b=parseFloat(GUI_VERSION);
-      var richtung=(isFinite(a)&&isFinite(b)&&a>b)?"Die GUI ist älter als der Helfer":"Der Helfer ist älter als die GUI";
+      var neuer=versionsVergleich(ZUSTAND.helperVersion,GUI_VERSION);
+      var richtung=neuer>0?"Die GUI ist älter als der Helfer":neuer<0?"Der Helfer ist älter als die GUI":"Versionsangaben unterscheiden sich";
       setzeBanner("fehler",{helfer:ZUSTAND.helperVersion,richtung:richtung});
     }else{
       setzeBanner("echt",{helfer:ZUSTAND.helperVersion,ordner:ZUSTAND.ordner,host:location.host});
