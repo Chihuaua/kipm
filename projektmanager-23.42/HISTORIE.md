@@ -772,10 +772,24 @@ Knopfbeschriftungen, Aktionsreihenfolge, CSS, JavaScript oder Dateinamen.
 - Offline-Regressionstests mit lokalen Repositories und simuliertem gh; keine echten GitHub-Schreibzugriffe.
 
 
-## 23.42.01 — fortlaufende Versionsnummer und geprüfte Übergabe
+## 23.42.03 — fortlaufende Versionsnummer und geprüfte Übergabe
 
 - Aktive Versionierung beginnt bei 23.42.01; weitere Änderungen folgen als 23.42.02, 23.42.03 usw.
 - GUI_VERSION, HELPER_VERSION und GUI_HINT zeigen dieselbe aktive Version.
 - Versionsvergleich prüft alle Nummernsegmente statt parseFloat.
 - Der bestehende Installationsordner projektmanager-23.42 bleibt bewusst stabil.
 - Enthält die zuvor offline geprüften Pfad- und Übergabekorrekturen; keine echten GitHub-Schreibzugriffe bei der Prüfung.
+
+
+## 23.42.02 — lokale Patch-ZIPs und Bereits-Enthalten-Diagnose
+
+- Datei wählen akzeptiert zusätzlich .zip und übermittelt das Archiv binärgenau als Base64.
+- Der Helfer extrahiert genau aktuell.patch und aktuell.json ohne Textumwandlung.
+- Bereits in GitHub-main enthaltene Plain-Diffs werden erkannt und nicht erneut eingetragen.
+
+
+## 23.42.03 — identische Postfach-Patches erkennen
+
+- Vor dem Ablegen/Eintragen wird der vorhandene Postfach-Patch bytegenau verglichen.
+- Identischer Patch mit gleicher Basis: Hinweis „liegt bereits im Postfach“, keine Schreibaktion.
+- Anderer Patch: Blockade mit alter/neuer Prüfsumme und Basis statt pauschaler Belegt-Meldung.
