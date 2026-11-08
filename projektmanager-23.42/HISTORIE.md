@@ -742,3 +742,40 @@ Dateien `projektmanager.py`/`projektmanager.js`/`projektmanager.pid`, Header
 älteren Icons automatisch auf), ZIP `projektmanager-23.42.zip`. GUI-Name bleibt
 „Projektmanager". Regel: Ordner niemals umbenennen/verschieben, während der Helfer
 läuft (sonst: „index.html nicht gefunden") — erst `pkill -f projektmanager.py`.
+
+
+## 23.42 · Arbeitsrevision pfad-diagnose.1 (nicht auf GitHub veröffentlicht)
+
+Ausgangspunkt: Chihuaua/kipm, Commit 379c824217ac3ac5d7059cfef740f6d30eefd0e1.
+Der GitHub-Referenzklon bleibt unverändert. Keine Änderungen an GUI-Anordnung,
+Knopfbeschriftungen, Aktionsreihenfolge, CSS, JavaScript oder Dateinamen.
+
+- Der Helfer prüft index.html vor dem Binden am eigenen Dateiordner.
+- Fehlende GUI-Dateien werden mit vollständigem erwartetem Pfad und Prozess-PID gemeldet.
+- Ein belegter Port wird nicht mehr als erfolgreicher Helferstart ausgegeben.
+- Andere Bindefehler werden ehrlich gemeldet; kein Browser wird fehlgeleitet.
+- Der Status enthält GUI-Pfad, Verfügbarkeit und Arbeitsrevision; GUI/Helfer bleiben 23.42.
+- Ein bereits laufender alter Prozess übernimmt diese Korrekturen erst nach einem Neustart.
+- Die sichtbare GUI und projektmanager.js bleiben bytegleich zur GitHub-Vorlage.
+
+
+## 23.42 · Arbeitsrevision uebergabe-pruefung.1 (nicht auf GitHub veröffentlicht)
+
+- Exakte Patch-Prüfsummen; keine stille Neuberechnung und kein Beschneiden der Patch-Bytes.
+- Vollständiges Nachladen abgeschnittener Gist-Dateien über raw_url; Upload wird zurückgelesen.
+- Keine stillen Dateifilter; Mail-Patches und Plain-Diffs werden passend verarbeitet.
+- Basisprüfung mit kurzen und vollständigen Hashes gegen den tatsächlich entfernten main-Stand.
+- Keine Zweig-Überschreibung; Buildfehler ohne Push; PR-Fehler ohne falsche Erfolgsmeldung.
+- Neue Patch-Dateien werden in der Diagnose als neu vorgesehen statt als Projektfehler gemeldet.
+- Übergabenotiz ist idempotent und erzeugt keinen automatischen Commit mehr.
+- Direkter HTTPS-Import von Patch-ZIPs und Raw-Patches mit Größen- und Adressprüfung.
+- Offline-Regressionstests mit lokalen Repositories und simuliertem gh; keine echten GitHub-Schreibzugriffe.
+
+
+## 23.42.01 — fortlaufende Versionsnummer und geprüfte Übergabe
+
+- Aktive Versionierung beginnt bei 23.42.01; weitere Änderungen folgen als 23.42.02, 23.42.03 usw.
+- GUI_VERSION, HELPER_VERSION und GUI_HINT zeigen dieselbe aktive Version.
+- Versionsvergleich prüft alle Nummernsegmente statt parseFloat.
+- Der bestehende Installationsordner projektmanager-23.42 bleibt bewusst stabil.
+- Enthält die zuvor offline geprüften Pfad- und Übergabekorrekturen; keine echten GitHub-Schreibzugriffe bei der Prüfung.

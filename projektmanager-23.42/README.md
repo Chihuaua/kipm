@@ -1,4 +1,4 @@
-# Projektmanager (Adventshaus) — Version 23.42
+# Projektmanager (Adventshaus) — Version 23.42.01
 
 Eigenständiges Projektmanager-Fenster für den KI-Ablauf am Adventshaus.
 Die GUI funktioniert ohne Node-Build und ohne externe CDN-Skripte; der Python-Helfer

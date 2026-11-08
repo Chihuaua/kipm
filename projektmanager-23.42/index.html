@@ -456,14 +456,14 @@
         <span class="lampe gruen" id="lampeGruen"></span>
         <span class="ampel-txt" id="ampelText">Vorschau</span>
       </div>
-      <div class="version" id="versionAnzeige">GUI 23.42</div>
+      <div class="version" id="versionAnzeige">GUI 23.42.01</div>
     </div>
   </header>
 
   <!-- Modus-Banner -->
   <div class="banner modus-demo" id="modusBanner">
     <span class="punkt"></span>
-    <span class="btext" id="modusText"><b>Demo-Modus</b> – reine Simulation, es wird nichts verändert · <b>Version 23.42</b> · Ordner: <code>nicht verbunden</code>. Für echten Betrieb: Helfer starten (<code>./start.sh</code>) und <code>http://127.0.0.1:8790/</code> öffnen.</span>
+    <span class="btext" id="modusText"><b>Demo-Modus</b> – reine Simulation, es wird nichts verändert · <b>Version 23.42.01</b> · Ordner: <code>nicht verbunden</code>. Für echten Betrieb: Helfer starten (<code>./start.sh</code>) und <code>http://127.0.0.1:8790/</code> öffnen.</span>
     <span class="mono" id="modusVersion">kein Echtbetrieb</span>
   </div>
 
@@ -822,7 +822,7 @@ echo "==> Fertig. Ein Icon auf dem Schreibtisch (Ordner: $HERE)"
 echo "Beenden und Neu starten laufen über die Werkzeugleiste in der GUI."
 </script>
 <script type="text/plain" id="src-readme">
-# Projektmanager (Adventshaus) — Version 23.42
+# Projektmanager (Adventshaus) — Version 23.42.01
 
 Eigenständiges Projektmanager-Fenster für den KI-Ablauf am Adventshaus.
 Die GUI funktioniert ohne Node-Build und ohne externe CDN-Skripte; der Python-Helfer
@@ -892,8 +892,19 @@ GIST_URL = "https://gist.github.com/Chihuaua/" + GIST_ID
 REPO_URL = "https://github.com/Chihuaua/adventshaus"
 CONFIG = os.path.join(HERE, "einstellungen.json")
 PID_FILE = os.path.join(HERE, "projektmanager.pid")
-HELPER_VERSION = "23.42"
-GUI_HINT = "23.42"
+HELPER_VERSION = "23.42.01"
+GUI_HINT = "23.42.01"
+HELPER_REVISION = "23.42.01"
+import io
+import ipaddress
+import shlex
+import zipfile
+
+MAX_PATCH_BYTES = 8 * 1024 * 1024
+MAX_HTTP_BYTES = 16 * 1024 * 1024
+
+
+
 SESSION_TOKEN = secrets.token_hex(24)
 GAME_PROC = None
 GAME_LOG = os.path.join(tempfile.gettempdir(), "adventshaus-spiel.log")
@@ -945,7 +956,7 @@ def scrub(text, token=""):
     return re.sub(r"(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]+)", "gh***", text)
 
 
-def run(cmd, cwd=None, input_text=None, token="", timeout=180, limit=4000):
+def run(cmd, cwd=None, input_text=None, token="", timeout=180, limit=4000, preserve=False):
     tok = token or read_token()
     try:
         r = subprocess.run(
@@ -956,7 +967,10 @@ def run(cmd, cwd=None, input_text=None, token="", timeout=180, limit=4000):
             text=True,
             timeout=timeout,
         )
-        out = scrub((r.stdout or "") + (r.stderr or ""), tok).strip()
+        raw_out = (r.stdout or "") + (r.stderr or "")
+        out = raw_out if preserve and r.returncode == 0 else scrub(raw_out, tok)
+        if not preserve:
+            out = out.strip()
         if limit is not None:
             out = out[:limit]
         return {"ok": r.returncode == 0, "code": r.returncode, "out": out}
@@ -1041,14 +1055,7 @@ def git_geraeumig(proj, token=""):
 
 
 def _origin_main_kurz(proj, token=""):
-    r = run(["git", "ls-remote", "origin", "refs/heads/main"], cwd=proj, token=token, timeout=20)
-    if r["ok"] and r["out"].strip():
-        return r["out"].split()[0][:7]
-    r_local = run(["git", "rev-parse", "--short", "origin/main"], cwd=proj, token=token)
-    if r_local["ok"] and r_local["out"].strip():
-        return r_local["out"].strip()
-    return ""
-
+    return _remote_main_full(proj, token)[:7]
 
 class GistRequestError(Exception):
     def __init__(self, out, loesung=""):
@@ -1117,13 +1124,240 @@ def _gist_request(method, token, payload=None, timeout=45):
 
 def _gist_lesen(token):
     body, _ = _gist_request("GET", token, timeout=45)
+    if not isinstance(body, dict) or not isinstance(body.get("files"), dict):
+        raise GistRequestError("GitHub hat keine lesbare Gist-Dateiliste geliefert.")
+    if body.get("truncated"):
+        raise GistRequestError("Gist-Dateiliste ist unvollständig.", "Postfach über GitHub prüfen; nichts übernehmen.")
+    for name, entry in body["files"].items():
+        if name not in ("aktuell.patch", "aktuell.json") or not entry.get("truncated"):
+            continue
+        limit = MAX_PATCH_BYTES if name == "aktuell.patch" else 65536
+        url = entry.get("raw_url") or ""
+        text = _raw_gist_datei(url, limit)
+        if len(text.encode("utf-8")) != int(entry.get("size", len(text.encode("utf-8")))):
+            raise GistRequestError("Die vollständige Gist-Datei hat eine unerwartete Größe.", "Nichts übernehmen.")
+        entry["content"] = text
+        entry["truncated"] = False
     return body
-
 
 def _gist_schreiben(files, token):
     body, _ = _gist_request("PATCH", token, payload={"files": files}, timeout=60)
+    try:
+        confirmation = _gist_lesen(token)
+    except GistRequestError as exc:
+        raise GistRequestError("Schreiben gesendet, aber nicht bestätigen können: " + exc.out,
+                               "Postfach prüfen. Nicht als erfolgreichen Upload behandeln.")
+    received = confirmation.get("files") or {}
+    for name, spec in files.items():
+        if spec is None:
+            if name in received:
+                raise GistRequestError("Löschen wurde nicht bestätigt: " + name)
+        elif name not in received or received[name].get("truncated") or received[name].get("content") != spec.get("content"):
+            raise GistRequestError("Postfach-Inhalt weicht nach dem Schreiben ab: " + name,
+                                   "Postfach prüfen. Kein erfolgreicher Upload bestätigt.")
     return body
 
+def _patch_meta_fehler(patch, meta):
+    if not isinstance(meta, dict):
+        return "aktuell.json muss ein JSON-Objekt sein."
+    if not isinstance(patch, str) or not re.search(r"^diff --git ", patch, re.M):
+        return "Kein vollständiger Git-Patch: Eine Zeile muss mit „diff --git “ beginnen."
+    if len(patch.encode("utf-8")) > MAX_PATCH_BYTES:
+        return "Patch überschreitet 8 MiB. Bitte als vollständigen Repository-Zweig übergeben."
+    basis = str(meta.get("basis") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{7,40}", basis):
+        return "In aktuell.json fehlt eine gültige Basis (7–40 Hex-Zeichen)."
+    want = str(meta.get("sha256") or "").strip().lower()
+    if not re.fullmatch(r"(?:[0-9a-f]{16}|[0-9a-f]{64})", want):
+        return "In aktuell.json fehlt die Prüfsumme (16 oder 64 Hex-Zeichen)."
+    actual = hashlib.sha256(patch.encode("utf-8")).hexdigest()
+    matched = actual.startswith(want) if len(want) == 16 else actual == want
+    if not matched:
+        return "Prüfsumme stimmt nicht mit den exakten Patch-Bytes überein. Nichts gespeichert oder übernommen; Patch als unveränderte Datei/ZIP neu liefern."
+    return None
+
+def _patch_bloecke(patch):
+    starts = list(re.finditer(r"^diff --git .*$", patch, re.M))
+    blocks = []
+    for index, match in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(patch)
+        text = patch[match.start():end]
+        try:
+            parts = shlex.split(match.group(0))
+        except ValueError:
+            parts = match.group(0).split()
+        new = bool(re.search(r"^new file mode |^--- /dev/null(?:\t|$)", text, re.M))
+        deleted = bool(re.search(r"^deleted file mode |^\+\+\+ /dev/null(?:\t|$)", text, re.M))
+        path = ""
+        if len(parts) >= 4:
+            path = parts[3] if deleted else parts[2]
+            path = re.sub(r"^[ab]/", "", path)
+        blocks.append({"path": path, "new": new, "deleted": deleted, "text": text})
+    return blocks
+
+def _patch_parse_check(patch, proj, token):
+    stat = run(["git", "apply", "--stat", "-"], cwd=proj, input_text=patch, token=token)
+    if not stat["ok"]:
+        return {"ok": False, "out": "Patch unvollständig oder defekt: " + git_klar(stat["out"]),
+                "loesung": "Vollständige Patch-Datei/ZIP verwenden. Es wurde nichts angewendet."}
+    blocks = _patch_bloecke(patch)
+    if not blocks:
+        return {"ok": False, "out": "Patch enthält keine Dateiänderung."}
+    for block in blocks:
+        path = block["path"]
+        if not path or path.startswith("/") or ".." in path.replace("\\", "/").split("/") or ".git" in path.split("/") or "\\" in path:
+            return {"ok": False, "out": "Unsicherer oder nicht lesbarer Dateipfad im Patch: " + path[:120]}
+    return None
+
+def _remote_main_full(proj, token=""):
+    remote = run(["git", "ls-remote", "origin", "refs/heads/main"], cwd=proj, token=token, timeout=20)
+    if not remote["ok"] or not remote["out"].strip():
+        return ""
+    full = remote["out"].split()[0].lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", full):
+        return ""
+    fetched = run(["git", "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+                  cwd=proj, token=token, timeout=60)
+    if not fetched["ok"]:
+        return ""
+    local = run(["git", "rev-parse", "--verify", "refs/remotes/origin/main"], cwd=proj, token=token)
+    return full if local["ok"] and local["out"].strip() == full else ""
+
+def _repo_sicher(proj, token="", main_required=False):
+    status = run(["git", "status", "--porcelain", "-uall"], cwd=proj, token=token)
+    if not status["ok"]:
+        return {"ok": False, "out": "Projekt nicht lesbar: " + git_klar(status["out"])}
+    if status["out"].strip():
+        names = [line[3:] for line in status["out"].splitlines()[:6]]
+        return {"ok": False, "out": "Arbeitsstand nicht sauber: " + ", ".join(names),
+                "loesung": "Eigene Änderungen zuerst ausdrücklich speichern. Nichts wurde überschrieben."}
+    branch = run(["git", "symbolic-ref", "--short", "HEAD"], cwd=proj, token=token)
+    if not branch["ok"]:
+        return {"ok": False, "out": "Kein normaler Branch ausgecheckt. Übergabe gestoppt."}
+    if main_required and branch["out"].strip() != "main":
+        return {"ok": False, "out": "Übergabe erwartet main; aktuell: " + branch["out"].strip()}
+    for marker in ("rebase-apply", "rebase-merge"):
+        path = run(["git", "rev-parse", "--git-path", marker], cwd=proj, token=token)["out"].strip()
+        if path and os.path.isdir(os.path.join(proj, path)):
+            return {"ok": False, "out": "Unvollendeter Git-Vorgang gefunden. Keine automatische Bereinigung.",
+                    "loesung": "Vorgang bewusst prüfen und abschließen; der Helfer hat nichts zurückgesetzt."}
+    return None
+
+def _commit_full(proj, ref, token=""):
+    result = run(["git", "rev-parse", "--verify", ref + "^{commit}"], cwd=proj, token=token)
+    return result["out"].strip() if result["ok"] else ""
+
+def _basis_gleich(meta, proj, token):
+    remote = _remote_main_full(proj, token)
+    if not remote:
+        return "", {"ok": False, "out": "GitHub-main nicht bestätigt. Keine schreibende Übergabe ohne erreichbare Basis."}
+    basis = str(meta.get("basis") or "").strip()
+    resolved = _commit_full(proj, basis, token)
+    if resolved != remote:
+        return remote, {"ok": False, "basisfehler": True,
+                        "out": "Patch-Basis %s passt nicht zu GitHub-main %s." % (basis[:12], remote[:7]),
+                        "loesung": "Neuen Patch auf GitHub-main liefern oder „Basis korrigieren“ mit echter Anwendbarkeitsprüfung verwenden."}
+    return remote, None
+
+def _ist_mail_patch(patch):
+    return bool(re.match(r"^From [0-9a-f]{40} ", patch) or re.match(r"^From:\s", patch))
+
+def _mail_patch_probe(proj, basis, patch, token):
+    temp = tempfile.TemporaryDirectory(prefix="projektmanager-am-test-")
+    added = run(["git", "worktree", "add", "--detach", temp.name, basis], cwd=proj, token=token)
+    if not added["ok"]:
+        temp.cleanup()
+        return {"ok": False, "out": "Patch-Testarbeitsplatz fehlgeschlagen: " + git_klar(added["out"])}
+    try:
+        applied = run(["git", "am", "--empty=drop"], cwd=temp.name, input_text=patch, token=token)
+        if not applied["ok"]:
+            run(["git", "am", "--abort"], cwd=temp.name, token=token)
+            return {"ok": False, "out": "Mail-Patch passt nicht auf die Basis: " + git_klar(applied["out"]),
+                    "loesung": "KI muss den vollständigen Patch auf den aktuellen Stand neu setzen."}
+        return None
+    finally:
+        run(["git", "worktree", "remove", "--force", temp.name], cwd=proj, token=token)
+        temp.cleanup()
+
+def _plain_patch_probe(proj, basis, patch, token):
+    temp = tempfile.TemporaryDirectory(prefix="projektmanager-apply-test-")
+    added = run(["git", "worktree", "add", "--detach", temp.name, basis], cwd=proj, token=token)
+    if not added["ok"]:
+        temp.cleanup()
+        return {"ok": False, "out": "Patch-Testarbeitsplatz fehlgeschlagen: " + git_klar(added["out"])}
+    try:
+        check = run(["git", "apply", "--check", "-"], cwd=temp.name, input_text=patch, token=token)
+        return None if check["ok"] else {"ok": False, "out": "Patch passt nicht auf GitHub-main: " + git_klar(check["out"])}
+    finally:
+        run(["git", "worktree", "remove", "--force", temp.name], cwd=proj, token=token)
+        temp.cleanup()
+
+def _patch_secret_fehler(patch, token):
+    for block in _patch_bloecke(patch):
+        if SENSITIVE_FILE_RE.search(block["path"]):
+            return "Potenziell geheime Datei im Patch blockiert: " + block["path"]
+    if token and token in patch:
+        return "Der Patch enthält das lokale Zugriffstoken. Übergabe blockiert."
+    if re.search(r"(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,})", patch):
+        return "Der Patch enthält ein mögliches GitHub-Token. Übergabe blockiert."
+    return None
+
+def _raw_gist_datei(url, limit):
+    data, _ = _http_bytes(url, limit, raw_only=True)
+    try:
+        return data.decode("utf-8")
+    except UnicodeError:
+        raise GistRequestError("Vollständige Gist-Datei ist kein gültiges UTF-8.", "Patch unverändert neu liefern.")
+
+def _postfach_meta(data):
+    files = data.get("files") or {}
+    patch = (files.get("aktuell.patch") or {}).get("content") or ""
+    try:
+        meta = json.loads((files.get("aktuell.json") or {}).get("content") or "{}")
+    except Exception:
+        meta = {}
+    return patch, meta
+
+def _erlaubte_adresse(url, raw_only=False):
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    raw_hosts = {"gist.githubusercontent.com", "raw.githubusercontent.com"}
+    allowed = raw_hosts if raw_only else raw_hosts | {"github.com", "gist.github.com"}
+    if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port not in (None, 443):
+        raise ValueError("Nur HTTPS-Adressen ohne Zugangsdaten oder Sonderport erlaubt.")
+    if host not in allowed and not (not raw_only and any(host.endswith(suffix) for suffix in (".e2b.app", ".arena.ai"))):
+        raise ValueError("Adresse gehört nicht zu GitHub oder einer Arena-Vorschau.")
+    addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    for item in addresses:
+        address = ipaddress.ip_address(item[4][0])
+        if getattr(address, "ipv4_mapped", None):
+            address = address.ipv4_mapped
+        if not address.is_global:
+            raise ValueError("Private oder lokale Zieladresse blockiert.")
+    return parsed
+
+def _http_bytes(url, limit, raw_only=False):
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    opener = urllib.request.build_opener(NoRedirect())
+    current = url
+    for _ in range(4):
+        _erlaubte_adresse(current, raw_only)
+        request = urllib.request.Request(current, headers={"User-Agent": "Projektmanager-Patch-Import"})
+        try:
+            with opener.open(request, timeout=30) as response:
+                data = response.read(limit + 1)
+                if len(data) > limit:
+                    raise ValueError("Datei überschreitet die sichere Größengrenze.")
+                return data, current
+        except urllib.error.HTTPError as exc:
+            location = exc.headers.get("Location") if exc.code in (301, 302, 303, 307, 308) else None
+            exc.close()
+            if not location:
+                raise
+            current = urllib.parse.urljoin(current, location)
+    raise ValueError("Zu viele Weiterleitungen.")
 
 def _token_fehlt():
     return {
@@ -1139,6 +1373,9 @@ def act_status():
         "version": HELPER_VERSION,
         "token": bool(read_token()),
         "ordner": HERE,
+        "revision": HELPER_REVISION,
+        "guiPfad": os.path.join(HERE, "index.html"),
+        "guiVorhanden": os.path.isfile(os.path.join(HERE, "index.html")),
         "cfg": {k: CFG.get(k) for k in ("projekt", "sicherung", "kennung", "spiel_url")},
     }
 
@@ -1225,73 +1462,37 @@ def act_einstellungen_speichern(payload):
 
 def postfach_basis_check(token, proj):
     if not token:
-        return {"ok": True, "out": "kein Token – Postfach-Prüfung übersprungen"}
+        return {"ok": True, "out": "Kein Token – Postfach nicht gelesen."}
     try:
-        data = _gist_lesen(token)
-        try:
-            meta = json.loads(((data.get("files") or {}).get("aktuell.json") or {}).get("content") or "{}")
-        except Exception:
-            meta = {}
-        if not meta.get("basis"):
-            return {"ok": True, "out": "kein Patch im Postfach"}
-        origin = _origin_main_kurz(proj, token)
-        basis = str(meta.get("basis", "")).strip()
-        if not origin:
-            return {"ok": True, "out": "Basis %s im Postfach (GitHub-main offline nicht prüfbar)" % basis}
-        if basis == origin:
-            return {"ok": True, "out": "Basis %s passt zu GitHub-main" % basis}
-        return {
-            "ok": False,
-            "out": "Basis %s ≠ GitHub-main %s – Patch veraltet." % (basis, origin),
-            "loesung": "Alten Patch entfernen oder Basis korrigieren.",
-            "link": GIST_URL,
-            "linkText": "Postfach öffnen",
-        }
-    except GistRequestError as e:
-        return {"ok": False, "out": e.out, "loesung": e.loesung}
-
+        patch, meta = _postfach_meta(_gist_lesen(token))
+        if not patch and not meta:
+            return {"ok": True, "out": "Kein Patch im Postfach."}
+        error = _patch_meta_fehler(patch, meta)
+        if error:
+            return {"ok": False, "out": error}
+        _, basis_error = _basis_gleich(meta, proj, token)
+        if basis_error:
+            return basis_error
+        return {"ok": True, "out": "Prüfsumme und Basis %s stimmen mit GitHub-main überein." % str(meta["basis"])[:7]}
+    except GistRequestError as exc:
+        return {"ok": False, "out": exc.out, "loesung": exc.loesung}
 
 def act_pruefen():
     proj, token = CFG["projekt"], read_token()
-    git_geraeumig(proj, token=token)
-    steps = [
-        ["git status", run(["git", "status", "--porcelain", "-uall"], cwd=proj, token=token)],
-        ["HEAD", run(["git", "rev-parse", "--short", "HEAD"], cwd=proj, token=token)],
-    ]
-    ls_rem = run(["git", "ls-remote", "origin", "refs/heads/main"], cwd=proj, token=token, timeout=20)
-    if ls_rem["ok"] and ls_rem["out"].strip():
-        steps.append(["GitHub main", {"ok": True, "out": ls_rem["out"].split()[0][:7]}])
-    else:
-        steps.append([
-            "GitHub main",
-            {
-                "ok": False,
-                "out": "GitHub-main nicht erreichbar (offline oder Remote-Fehler).",
-                "loesung": "Internetverbindung prüfen; lokale Arbeit bleibt möglich.",
-            },
-        ])
+    status = run(["git", "status", "--porcelain", "-uall"], cwd=proj, token=token)
+    head = run(["git", "rev-parse", "--short", "HEAD"], cwd=proj, token=token)
+    remote = _remote_main_full(proj, token)
+    steps = [["git status", status], ["HEAD", head],
+             ["GitHub main", {"ok": bool(remote), "out": remote[:7] if remote else "nicht erreichbar"}]]
     if os.path.isdir(CFG["sicherung"]):
-        steps.append(
-            ["Sicherung", run(["git", "-C", CFG["sicherung"], "rev-parse", "--short", "refs/heads/main"], token=token)]
-        )
+        steps.append(["Sicherung", run(["git", "-C", CFG["sicherung"], "rev-parse", "--short", "refs/heads/main"], token=token)])
     else:
-        steps.append(
-            [
-                "Sicherung",
-                {
-                    "ok": False,
-                    "out": "nicht gefunden: " + CFG["sicherung"],
-                    "loesung": "Pfad „sicherung“ in den Einstellungen prüfen.",
-                },
-            ]
-        )
-    if os.path.exists(os.path.join(proj, "tools", "check.sh")):
-        steps.append(["check.sh", run(["bash", "tools/check.sh"], cwd=proj, token=token)])
-    steps.append(["Postfach-Basis", postfach_basis_check(token, proj)])
-    return {"ok": all(s[1]["ok"] for s in steps),
-            "github_main": (ls_rem["out"].split()[0][:7] if (ls_rem["ok"] and ls_rem["out"].strip()) else ""),
-            "steps": [{"name": n, **v} for n, v in steps]}
-
+        steps.append(["Sicherung", {"ok": False, "out": "Sicherungspfad nicht gefunden."}])
+    if os.path.isfile(os.path.join(proj, "tools", "check.sh")):
+        steps.append(["check.sh", run(["bash", "-c", 'ADVENTS_PROJ="$PWD" bash tools/check.sh'], cwd=proj, token=token)])
+    steps.append(["Postfach", postfach_basis_check(token, proj)])
+    return {"ok": all(step[1]["ok"] for step in steps), "github_main": remote[:7],
+            "steps": [{"name": name, **value} for name, value in steps]}
 
 def _filtere_bereits_vorhandene(patch_text, proj):
     entfernt, rest = [], []
@@ -1313,210 +1514,155 @@ def _filtere_bereits_vorhandene(patch_text, proj):
 
 def act_ablegen(payload=None):
     payload = payload or {}
-    force = bool(payload.get("force"))
     token = read_token()
     if not token:
         return _token_fehlt()
     proj = CFG["projekt"]
-    git_geraeumig(proj, token=token)
-    st = run(["git", "status", "--porcelain", "-uall"], cwd=proj, token=token)
-    if not st["ok"]:
-        return {
-            "ok": False,
-            "out": "Projekt-Status nicht lesbar: " + git_klar(st["out"]),
-            "loesung": "Pfad „projekt“ prüfen – aktuell: " + proj,
-        }
-    if st["out"].strip():
-        zeilen = [z for z in st["out"].splitlines() if z.strip()]
-        namen = [z.split(None, 1)[-1] for z in zeilen[:8]]
-        return {
-            "ok": False,
-            "out": "Stand nicht sauber – %d offene Änderung(en): %s" % (len(zeilen), ", ".join(namen)),
-            "loesung": "Knopf „Offene Änderungen speichern“ drücken, danach erneut ins Postfach legen.",
-        }
-
-    # Postfach-Überschreibschutz: prüfen, ob bereits ein Patch im Gist liegt
-    if not force:
+    safety = _repo_sicher(proj, token)
+    if safety:
+        return safety
+    remote = _remote_main_full(proj, token)
+    if not remote:
+        return {"ok": False, "out": "GitHub-main nicht bestätigt – nichts abgelegt."}
+    counts = run(["git", "rev-list", "--left-right", "--count", remote + "...HEAD"], cwd=proj, token=token)
+    parts = counts["out"].split() if counts["ok"] else []
+    if len(parts) != 2:
+        return {"ok": False, "out": "Lokal/GitHub-Vergleich nicht lesbar."}
+    behind, ahead = map(int, parts)
+    if behind:
+        return {"ok": False, "out": "Divergenz: lokal %s voraus, GitHub %s voraus. Nichts abgelegt." % (ahead, behind)}
+    if not ahead:
+        return {"ok": True, "info": True, "out": "Nichts abgelegt – keine lokalen Commits vor GitHub-main."}
+    if not payload.get("force"):
         try:
-            existing = _gist_lesen(token)
-            files = existing.get("files") or {}
-            old_patch = ((files.get("aktuell.patch") or {}).get("content") or "").strip()
-            if old_patch:
-                try:
-                    old_meta = json.loads((files.get("aktuell.json") or {}).get("content") or "{}")
-                except Exception:
-                    old_meta = {}
-                alt_titel = str(old_meta.get("titel") or "unbekannt")
-                alt_basis = str(old_meta.get("basis") or "?")
-                return {
-                    "ok": False,
-                    "ueberschreiben": True,
-                    "out": "Im Postfach liegt bereits ein Patch („%s“, Basis %s)." % (alt_titel, alt_basis),
-                    "loesung": "Wähle „Trotzdem überschreiben“ oder entferne zuerst den alten Patch.",
-                    "link": GIST_URL,
-                    "linkText": "Postfach öffnen",
-                }
-        except GistRequestError as e:
-            return {"ok": False, "out": "Postfach nicht prüfbar: " + e.out, "loesung": e.loesung}
-
-    # Mehr-Commit-Unterstützung: alle lokalen Commits seit origin/main bündeln
-    ahead = run(["git", "rev-list", "--count", "origin/main..HEAD"], cwd=proj, token=token)
-    ahead_count = int(ahead["out"].strip()) if ahead["ok"] and ahead["out"].strip().isdigit() else 0
-    if ahead_count == 0:
-        basis = (run(["git", "rev-parse", "--short", "origin/main"], cwd=proj, token=token)["out"].strip()
-                 or run(["git", "rev-parse", "--short", "HEAD"], cwd=proj, token=token)["out"].strip())
-        return {"ok": True, "info": True,
-                "out": "Nichts abgelegt – lokal liegt nichts vor GitHub (Stand %s). "
-                       "Erst „Offene Änderungen speichern“ (oder „Lokal aktualisieren“), dann erneut ablegen." % basis}
-    patch = run(["git", "format-patch", "origin/main..HEAD", "--stdout"], cwd=proj, token=token, limit=None)
-    basis = run(["git", "rev-parse", "--short", "origin/main"], cwd=proj, token=token)["out"].strip()
-    commit_info = "%d Commit(s)" % ahead_count
-
-    if not patch["ok"] or not patch["out"]:
-        return {"ok": False, "out": "Kein Patch erzeugt: " + git_klar(patch["out"])}
-    patch_text = patch["out"]
-    entfernt = []
-    if not re.search(r"^diff --git ", patch_text, flags=re.M):
-        return {
-            "ok": True,
-            "info": True,
-            "out": "Nichts abgelegt – Patch enthält keine Dateiänderungen.",
-        }
-    sha16 = hashlib.sha256(patch_text.encode("utf-8")).hexdigest()[:16]
-    titel = run(["git", "log", "-1", "--pretty=%s"], cwd=proj, token=token)["out"].strip()
-    meta = {
-        "datei": "aktuell.patch",
-        "sha256": sha16,
-        "titel": titel,
-        "basis": basis,
-        "commits": max(1, ahead_count),
-    }
+            old_patch, old_meta = _postfach_meta(_gist_lesen(token))
+            if old_patch or old_meta:
+                return {"ok": False, "ueberschreiben": True,
+                        "out": "Postfach belegt: %s, Basis %s." % (old_meta.get("titel", "unbekannt"), old_meta.get("basis", "?")),
+                        "loesung": "Alten Patch entfernen oder ausdrücklich „Trotzdem überschreiben“ wählen."}
+        except GistRequestError as exc:
+            return {"ok": False, "out": exc.out, "loesung": exc.loesung}
+    generated = run(["git", "format-patch", remote + "..HEAD", "--stdout"], cwd=proj, token=token,
+                    limit=None, preserve=True)
+    if not generated["ok"] or not generated["out"]:
+        return {"ok": False, "out": "Kein Patch erzeugt: " + git_klar(generated["out"])}
+    patch = generated["out"]
+    secret = _patch_secret_fehler(patch, token)
+    if secret:
+        return {"ok": False, "out": secret, "loesung": "Geheimnis entfernen und den Stand bewusst neu speichern; nichts ins Postfach geschrieben."}
+    title = run(["git", "log", "-1", "--pretty=%s"], cwd=proj, token=token)["out"].strip()
+    meta = {"datei": "aktuell.patch", "sha256": hashlib.sha256(patch.encode()).hexdigest()[:16],
+            "titel": title, "basis": remote, "commits": ahead}
+    error = _patch_meta_fehler(patch, meta) or _patch_parse_check(patch, proj, token)
+    if error:
+        return error if isinstance(error, dict) else {"ok": False, "out": error}
     try:
-        _gist_schreiben(
-            {
-                "aktuell.patch": {"content": patch_text},
-                "aktuell.json": {"content": json.dumps(meta, ensure_ascii=False)},
-            },
-            token,
-        )
-        hinweis = (" Entfernt: " + ", ".join(entfernt)) if entfernt else ""
-        return {
-            "ok": True,
-            "out": "Patch ins Postfach gelegt (%s). Prüfsumme %s, Basis %s.%s" % (commit_info, sha16, basis, hinweis),
-        }
-    except GistRequestError as e:
-        return {"ok": False, "out": "Ablegen fehlgeschlagen: " + e.out, "loesung": e.loesung}
-
+        _gist_schreiben({"aktuell.patch": {"content": patch}, "aktuell.json": {"content": json.dumps(meta, ensure_ascii=False)}}, token)
+    except GistRequestError as exc:
+        return {"ok": False, "out": exc.out, "loesung": exc.loesung}
+    return {"ok": True, "out": "Patch abgelegt und zurückgelesen (%d Commit(s)), Prüfsumme %s, Basis %s." % (ahead, meta["sha256"], remote[:7])}
 
 def act_uebernehmen():
     token = read_token()
     if not token:
         return _token_fehlt()
     proj = CFG["projekt"]
+    safety = _repo_sicher(proj, token, main_required=True)
+    if safety:
+        return safety
     try:
-        data = _gist_lesen(token)
-    except GistRequestError as e:
-        return {"ok": False, "out": "Postfach nicht lesbar: " + e.out, "loesung": e.loesung}
-    files = data.get("files") or {}
-    original = (files.get("aktuell.patch") or {}).get("content") or ""
-    try:
-        meta = json.loads((files.get("aktuell.json") or {}).get("content") or "{}")
-    except Exception:
-        meta = {}
-    if not original:
-        return {
-            "ok": False,
-            "out": "Kein aktuell.patch im Postfach.",
-            "loesung": "KI-Patch mit „Patch holen“ ablegen.",
-        }
-    if hashlib.sha256(original.encode("utf-8")).hexdigest()[:16] != meta.get("sha256"):
-        return {
-            "ok": False,
-            "out": "Prüfsumme stimmt nicht – nichts wurde verändert.",
-            "loesung": "Patch neu ablegen lassen.",
-            "link": GIST_URL,
-            "linkText": "Postfach öffnen",
-        }
-    origin = _origin_main_kurz(proj, token)
-    lokal = run(["git", "rev-parse", "--short", "HEAD"], cwd=proj, token=token)["out"].strip()
-    basis = str(meta.get("basis") or "").strip()
-    erlaubte_basen = {b for b in (origin, lokal) if b}
-    if basis and erlaubte_basen and basis not in erlaubte_basen:
-        return {
-            "ok": False,
-            "basisfehler": True,
-            "out": "Veralteter Patch: Basis %s, GitHub-main %s, lokal %s." % (basis, origin or "–", lokal),
-            "loesung": "KI um neuen Patch bitten oder geprüft „Basis korrigieren“ verwenden.",
-            "link": GIST_URL,
-            "linkText": "Postfach öffnen",
-        }
-    git_geraeumig(proj, token=token)
-    patch, vorhanden = _filtere_bereits_vorhandene(original, proj)
-    if not re.search(r"^diff --git ", patch, flags=re.M):
-        return {
-            "ok": True,
-            "info": True,
-            "out": "Nur bereits vorhandene Dateien im Patch: %s – nichts Neues zu übernehmen." % ", ".join(vorhanden),
-        }
-    vorab = run(["git", "apply", "--check", "-"], cwd=proj, input_text=patch, token=token)
-    if not vorab["ok"]:
-        return {
-            "ok": False,
-            "out": git_klar(vorab["out"]),
-            "loesung": "Nichts wurde verändert. Die KI muss den Patch neu aufsetzen.",
-            "link": GIST_URL,
-            "linkText": "Postfach öffnen",
-        }
-    thema = re.sub(r"[^a-z0-9]+", "-", str(meta.get("titel") or "patch").lower()).strip("-")[:24] or "patch"
-    branch = "ki/" + thema
-    ausgang = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=proj, token=token)["out"].strip() or "main"
-    if not run(["git", "checkout", "-B", branch], cwd=proj, token=token)["ok"]:
-        return {"ok": False, "out": "Zweig konnte nicht erstellt werden: " + branch}
-    am = run(["git", "am"], cwd=proj, input_text=patch, token=token)
-    if not am["ok"]:
-        run(["git", "am", "--abort"], cwd=proj, token=token)
-        run(["git", "checkout", ausgang], cwd=proj, token=token)
-        return {
-            "ok": False,
-            "out": git_klar(am["out"]),
-            "loesung": "Zurück auf „%s“; die KI muss den Patch neu aufsetzen." % ausgang,
-        }
+        patch, meta = _postfach_meta(_gist_lesen(token))
+    except GistRequestError as exc:
+        return {"ok": False, "out": exc.out, "loesung": exc.loesung}
+    error = _patch_meta_fehler(patch, meta)
+    if error:
+        return {"ok": False, "out": error}
+    secret = _patch_secret_fehler(patch, token)
+    if secret:
+        return {"ok": False, "out": secret}
+    error = _patch_parse_check(patch, proj, token)
+    if error:
+        return error
+    remote, basis_error = _basis_gleich(meta, proj, token)
+    if basis_error:
+        return basis_error
+    mail = _ist_mail_patch(patch)
+    if mail:
+        error = _mail_patch_probe(proj, remote, patch, token)
+    else:
+        error = _plain_patch_probe(proj, remote, patch, token)
+    if error:
+        return error
+    checksum = hashlib.sha256(patch.encode()).hexdigest()[:16]
+    title = str(meta.get("titel") or "Arena-Patch").strip()[:200]
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:24] or "patch"
+    branch = "ki/" + slug + "-" + checksum[:8]
+    if run(["git", "show-ref", "--verify", "--quiet", "refs/heads/" + branch], cwd=proj, token=token)["ok"]:
+        return {"ok": False, "out": "Lokaler Zweig existiert bereits: " + branch + ". Nichts überschrieben."}
+    if run(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=proj, token=token)["out"].strip():
+        return {"ok": False, "out": "GitHub-Zweig existiert bereits: " + branch + ". Nichts überschrieben."}
+    original_branch = run(["git", "symbolic-ref", "--short", "HEAD"], cwd=proj, token=token)["out"].strip()
+    created = run(["git", "checkout", "-b", branch, remote], cwd=proj, token=token)
+    if not created["ok"]:
+        return {"ok": False, "out": "Zweig nicht angelegt: " + git_klar(created["out"])}
+
+    def finish(result, keep_branch):
+        back = run(["git", "checkout", original_branch], cwd=proj, token=token)
+        if not back["ok"]:
+            result["ok"] = False
+            result["out"] += " Rückwechsel auf %s NICHT bestätigt: %s" % (original_branch, git_klar(back["out"]))
+            return result
+        if not keep_branch:
+            run(["git", "branch", "-D", branch], cwd=proj, token=token)
+        return result
+
+    if mail:
+        applied = run(["git", "am", "--empty=drop"], cwd=proj, input_text=patch, token=token)
+        if not applied["ok"]:
+            run(["git", "am", "--abort"], cwd=proj, token=token)
+            return finish({"ok": False, "out": "git am fehlgeschlagen: " + git_klar(applied["out"])}, False)
+        if _commit_full(proj, "HEAD", token) == remote:
+            return finish({"ok": True, "info": True, "out": "Mail-Patch enthielt keine neue Änderung; main unverändert."}, False)
+    else:
+        applied = run(["git", "apply", "--index", "-"], cwd=proj, input_text=patch, token=token)
+        if not applied["ok"]:
+            return finish({"ok": False, "out": "git apply fehlgeschlagen: " + git_klar(applied["out"])}, False)
+        committed = run(_commit_ident(proj, token) + ["-m", title], cwd=proj, token=token)
+        if not committed["ok"]:
+            return {"ok": False, "branch": branch,
+                    "out": "Plain-Diff angewendet, aber Commit fehlgeschlagen. Änderungen verbleiben isoliert auf Zweig " + branch + "; nicht automatisch nach main mitgenommen.",
+                    "detail": git_klar(committed["out"]),
+                    "loesung": "Arbeitszweig bewusst prüfen. Kein Push und kein PR erfolgt."}
+    if not os.path.isfile(os.path.join(proj, "node_modules/.bin/tsc")):
+        return finish({"ok": False, "out": "tsc fehlt im Projekt. Abhängigkeiten zuerst installieren; kein Push."}, False)
     tsc = run(["./node_modules/.bin/tsc", "--noEmit"], cwd=proj, token=token)
     build = run(["npm", "run", "build"], cwd=proj, token=token)
-    if not (tsc["ok"] and build["ok"]):
-        run(["git", "checkout", ausgang], cwd=proj, token=token)
-        return {
-            "ok": False,
-            "branch": branch,
-            "out": "Patch auf %s angewendet (zurück auf %s), aber Typen %s / Build %s."
-            % (branch, ausgang, "OK" if tsc["ok"] else "Fehler", "OK" if build["ok"] else "Fehler"),
-            "detail": tsc["out"][-500:] + "\n" + build["out"][-500:],
-            "loesung": "Kein PR geöffnet. Buildfehler im Zweig %s prüfen." % branch,
-        }
+    if not tsc["ok"] or not build["ok"]:
+        return finish({"ok": False, "out": "Typen %s / Build %s – kein Push, kein PR." % ("OK" if tsc["ok"] else "Fehler", "OK" if build["ok"] else "Fehler"),
+                       "detail": tsc["out"][-500:] + "\n" + build["out"][-500:]}, False)
+    branch_head = _commit_full(proj, "HEAD", token)
     push = run(["git", "push", "-u", "origin", branch], cwd=proj, token=token, timeout=60)
-    # Immer sauber auf Ausgangszweig (z. B. main) zurückkehren
-    run(["git", "checkout", ausgang], cwd=proj, token=token)
-    if not push["ok"]:
-        return {
-            "ok": False,
-            "branch": branch,
-            "out": "Build OK (Zweig %s lokal bereit, zurück auf %s), aber Push fehlgeschlagen: %s"
-            % (branch, ausgang, git_klar(push["out"])),
-            "loesung": "Falls der Gist-Token absichtlich keine Repo-Rechte hat, Zweig manuell oder über gh pushen.",
-        }
+    pushed = run(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=proj, token=token)["out"].strip()
+    remote_head = pushed.split()[0] if pushed else ""
+    if remote_head != branch_head:
+        return finish({"ok": False, "out": "Push nicht bestätigt: " + git_klar(push["out"])}, False)
     pr = run(["gh", "pr", "create", "--base", "main", "--head", branch, "--fill"], cwd=proj, token=token, timeout=45)
-    m = re.search(r"https://\S+?/pull/\d+", pr["out"])
-    pr_url = m.group(0) if m else (REPO_URL + "/compare/main..." + urllib.parse.quote(branch, safe=""))
-    hinweis = (" Entfernt: " + ", ".join(vorhanden)) if vorhanden else ""
-    return {
-        "ok": True,
-        "branch": branch,
-        "pr_url": pr_url,
-        "out": "Zweig %s · Typen OK · Build OK · %s (Arbeitsbaum wieder auf %s).%s"
-        % (branch, "PR geöffnet" if pr["ok"] else "PR-Vergleich geöffnet", ausgang, hinweis),
-        "detail": pr["out"],
-    }
-
+    match = re.search(r"https://\S+?/pull/\d+", pr["out"]) if pr["ok"] else None
+    pr_url = match.group(0) if match else ""
+    if not pr_url:
+        existing = run(["gh", "pr", "view", branch, "--json", "url,state"], cwd=proj, token=token, timeout=30)
+        try:
+            info = json.loads(existing["out"]) if existing["ok"] else {}
+            if info.get("state") == "OPEN" and re.match(r"^https://", info.get("url", "")):
+                pr_url = info["url"]
+        except Exception:
+            pass
+    if not pr_url:
+        return finish({"ok": False, "branch": branch,
+                       "out": "Zweig gepusht, aber kein Pull Request bestätigt. Das ist kein PR-Erfolg.",
+                       "detail": pr["out"], "loesung": "Lokale gh-Anmeldung prüfen; Zweig bleibt für eine bewusste PR-Öffnung erhalten."}, True)
+    return finish({"ok": True, "branch": branch, "pr_url": pr_url,
+                   "out": "Zweig %s · Typen/Build OK · Pull Request bestätigt · zurück auf %s." % (branch, original_branch)}, True)
 
 def act_beenden():
     def _spaeeter():
@@ -1585,105 +1731,69 @@ def act_zweige():
 
 
 def act_aktualisieren():
-    token = read_token()
-    proj = CFG["projekt"]
-    st = run(["git", "status", "--porcelain", "-uall"], cwd=proj, token=token)
-    if not st["ok"]:
-        return {"ok": False, "out": "Projekt nicht lesbar: " + git_klar(st["out"])}
-    if st["out"].strip():
-        zeilen = [z for z in st["out"].splitlines() if z.strip()]
-        namen = [z[3:].strip().strip('"') for z in zeilen[:6]]
-        return {
-            "ok": False,
-            "out": "Nicht aktualisiert – %d offene Änderung(en): %s" % (len(zeilen), ", ".join(namen)),
-            "loesung": "Erst „Offene Änderungen speichern“ drücken, dann „Lokal aktualisieren“.",
-        }
-    vor = run(["git", "rev-parse", "--short", "HEAD"], cwd=proj, token=token)["out"].strip()
+    token, proj = read_token(), CFG["projekt"]
+    safety = _repo_sicher(proj, token, main_required=True)
+    if safety:
+        return safety
+    remote = _remote_main_full(proj, token)
+    if not remote:
+        return {"ok": False, "out": "GitHub-main nicht bestätigt; nichts aktualisiert."}
+    counts = run(["git", "rev-list", "--left-right", "--count", remote + "...HEAD"], cwd=proj, token=token)
+    parts = counts["out"].split() if counts["ok"] else []
+    if len(parts) != 2:
+        return {"ok": False, "out": "Abgleich nicht lesbar; nichts aktualisiert."}
+    behind, ahead = map(int, parts)
+    if behind and ahead:
+        return {"ok": False, "out": "Divergenz: GitHub %s voraus, lokal %s voraus. Kein Reset, kein Merge." % (behind, ahead)}
+    if not behind:
+        return {"ok": True, "info": True, "out": "GitHub-main enthält nichts Neues; lokale Commits bleiben unverändert."}
+    before = _commit_full(proj, "HEAD", token)
     pull = run(["git", "pull", "--ff-only", "origin", "main"], cwd=proj, token=token, timeout=60)
     if not pull["ok"]:
-        return {
-            "ok": False,
-            "out": "Lokale Aktualisierung fehlgeschlagen: " + git_klar(pull["out"]),
-            "loesung": "Eventuell Divergenz (beide Seiten eigene Commits) – „Stand prüfen“ für Details.",
-        }
-    nach = run(["git", "rev-parse", "--short", "HEAD"], cwd=proj, token=token)["out"].strip()
-    if vor == nach:
-        return {"ok": True, "info": True, "out": "Lokal war schon aktuell (main " + vor + ")."}
-    return {"ok": True, "out": "Lokal aktualisiert: main " + vor + " → " + nach + " (GitHub-Stand übernommen)."}
-
+        return {"ok": False, "out": "Aktualisierung fehlgeschlagen: " + git_klar(pull["out"])}
+    return {"ok": True, "out": "Lokal aktualisiert: %s → %s." % (before[:7], _commit_full(proj, "HEAD", token)[:7])}
 
 def act_sichern():
     token, sicher, proj = read_token(), CFG["sicherung"], CFG["projekt"]
-    git_geraeumig(proj, token=token)
-    if not os.path.isdir(sicher):
-        return {
-            "ok": False,
-            "out": "Sicherung nicht gefunden: " + sicher,
-            "loesung": "Pfad „sicherung“ in den Einstellungen prüfen.",
-        }
-    if not run(["git", "-C", sicher, "rev-parse", "--git-dir"], token=token)["ok"]:
-        return {"ok": False, "out": "Sicherung ist kein Git-Repository: " + sicher}
-    fetch = run(["git", "-C", sicher, "fetch", "origin"], token=token, timeout=30)
-    if not fetch["ok"]:
-        return {"ok": False, "out": "Sicherung nicht aktualisierbar: " + git_klar(fetch["out"])}
+    if not os.path.isdir(sicher) or not run(["git", "-C", sicher, "rev-parse", "--git-dir"], token=token)["ok"]:
+        return {"ok": False, "out": "Sicherung ist kein vorhandenes Git-Repository: " + sicher}
     bare = run(["git", "-C", sicher, "rev-parse", "--is-bare-repository"], token=token)["out"].strip() == "true"
     if bare:
-        res = run(["git", "-C", sicher, "fetch", "origin", "+refs/heads/main:refs/heads/main"], token=token, timeout=30)
+        updated = run(["git", "-C", sicher, "fetch", "origin", "+refs/heads/main:refs/heads/main"], token=token, timeout=30)
+        main_ref = "refs/heads/main"
     else:
-        dirty = run(["git", "-C", sicher, "status", "--porcelain"], token=token)["out"].strip()
-        if dirty:
-            return {
-                "ok": False,
-                "out": "Sicherung hat ungespeicherte lokale Änderungen – kein Überschreiben durchgeführt.",
-                "loesung": "Sicherungsordner prüfen oder als Bare-Repository anlegen.",
-            }
-        res = run(["git", "-C", sicher, "reset", "--hard", "origin/main"], token=token)
-
-    ueber = os.path.join(proj, "docs", "UEBERGABE.md")
-    hand = ""
-    if os.path.exists(ueber):
-        with open(ueber, encoding="utf-8") as fp:
-            m = re.search(r"<!--\s*HAND:.*", fp.read(), re.S)
-            hand = m.group(0) if m else ""
-    main = run(["git", "rev-parse", "--short", "HEAD"], cwd=proj, token=token)["out"].strip()
-    auto = "## Stand (automatisch, %s)\nmain %s · Kennung %s · Prüfung: siehe Projektmanager\n\n" % (
-        time.strftime("%d.%m.%Y %H:%M"),
-        main,
-        CFG["kennung"],
-    )
-    try:
-        os.makedirs(os.path.dirname(ueber), exist_ok=True)
-        with open(ueber, "w", encoding="utf-8") as fp:
-            fp.write(auto + (hand or "<!-- HAND: ab hier schreibt nur der Besitzer -->\n\n## Als Nächstes\n"))
-        ueb_ok = True
-    except Exception as e:
-        return {"ok": False, "out": "Übergabedatei nicht schreibbar: " + str(e)}
-    gespeichert = ""
-    if run(["git", "rev-parse", "--git-dir"], cwd=proj, token=token)["ok"]:
-        run(["git", "add", "--", ueber], cwd=proj, token=token)
-        if not run(["git", "diff", "--cached", "--quiet"], cwd=proj, token=token)["ok"]:
-            c = run(_commit_ident(proj, token=token) + ["-m", "docs: Übergabedatei"], cwd=proj, token=token)
-            if c["ok"]:
-                gespeichert = " und die Übergabedatei gespeichert"
-
-    ahead = run(["git", "rev-list", "--count", "origin/main..HEAD"], cwd=proj, token=token)
-    ahead_count = int(ahead["out"].strip()) if ahead["ok"] and ahead["out"].strip().isdigit() else 0
-    lokal_hinweis = (
-        " Hinweis: Im Projektordner liegen %d lokale(r) Commit(s) vor origin/main." % ahead_count
-        if ahead_count > 0
-        else ""
-    )
-    ok = res["ok"] and ueb_ok
-    return {
-        "ok": ok,
-        "out": (
-            "Stand gesichert (Sicherung auf main, Übergabedatei aktualisiert%s).%s"
-            % (gespeichert, lokal_hinweis)
-        )
-        if ok
-        else "Sichern unvollständig: " + git_klar(res["out"]),
-    }
-
+        updated = run(["git", "-C", sicher, "fetch", "origin", "main"], token=token, timeout=30)
+        if updated["ok"] and run(["git", "-C", sicher, "status", "--porcelain"], token=token)["out"].strip():
+            return {"ok": False, "out": "Sicherung hat offene Änderungen – nichts zurückgesetzt."}
+        if updated["ok"]:
+            updated = run(["git", "-C", sicher, "reset", "--hard", "origin/main"], token=token)
+        main_ref = "origin/main"
+    if not updated["ok"]:
+        return {"ok": False, "out": "Sicherung nicht aktualisiert: " + git_klar(updated["out"])}
+    main = run(["git", "-C", sicher, "rev-parse", "--short", main_ref], token=token)["out"].strip()
+    path = os.path.join(proj, "docs", "UEBERGABE.md")
+    existing = ""
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as handle:
+            existing = handle.read()
+    hand_match = re.search(r"<!--\s*HAND:.*", existing, re.S)
+    hand = hand_match.group(0) if hand_match else "<!-- HAND: ab hier schreibt nur der Besitzer -->\n\n## Als Nächstes\n"
+    previous_auto = existing[:hand_match.start()] if hand_match else ""
+    marker = re.search(r"main ([0-9a-f]+) · Kennung ([^\n]+)", previous_auto)
+    if marker and marker.group(1) == main and marker.group(2).strip() == str(CFG.get("kennung", "")):
+        auto = previous_auto
+    else:
+        auto = "## Stand (automatisch, %s)\nmain %s · Kennung %s · Prüfung: siehe Projektmanager\n\n" % (time.strftime("%d.%m.%Y %H:%M"), main, CFG.get("kennung", ""))
+    desired = auto + hand
+    changed = desired != existing
+    if changed:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(desired)
+        except Exception as exc:
+            return {"ok": False, "out": "Übergabedatei nicht schreibbar: " + str(exc)}
+    return {"ok": True, "out": "Sicherung auf GitHub-main %s aktualisiert. Übergabedatei %s" % (main, "geändert – nicht automatisch committet; bewusst speichern." if changed else "unverändert – kein neuer Commit erzeugt.")}
 
 UEBERGABE_DATEIEN = [
     "index.html",
@@ -1790,146 +1900,155 @@ def act_basis_korrigieren():
     token = read_token()
     if not token:
         return _token_fehlt()
+    proj = CFG["projekt"]
     try:
-        data = _gist_lesen(token)
-    except GistRequestError as e:
-        return {"ok": False, "out": e.out, "loesung": e.loesung}
-    files = data.get("files") or {}
+        patch, meta = _postfach_meta(_gist_lesen(token))
+    except GistRequestError as exc:
+        return {"ok": False, "out": exc.out}
+    remote = _remote_main_full(proj, token)
+    if not remote:
+        return {"ok": False, "out": "GitHub-main nicht bestätigt; Basis nicht geändert."}
+    candidate = dict(meta) if isinstance(meta, dict) else {}
+    old = str(candidate.get("basis") or "–")
+    candidate["basis"] = remote
+    error = _patch_meta_fehler(patch, candidate) or _patch_parse_check(patch, proj, token)
+    if error:
+        return error if isinstance(error, dict) else {"ok": False, "out": error}
+    if _ist_mail_patch(patch):
+        error = _mail_patch_probe(proj, remote, patch, token)
+    else:
+        error = _plain_patch_probe(proj, remote, patch, token)
+    if error:
+        return error
     try:
-        meta = json.loads((files.get("aktuell.json") or {}).get("content") or "{}")
-    except Exception:
-        return {"ok": False, "out": "aktuell.json ist nicht lesbar."}
-    patch = (files.get("aktuell.patch") or {}).get("content") or ""
-    if patch and hashlib.sha256(patch.encode("utf-8")).hexdigest()[:16] != meta.get("sha256"):
-        return {"ok": False, "out": "Basis nicht geändert: Die Patch-Prüfsumme stimmt nicht."}
-    origin = _origin_main_kurz(CFG["projekt"], token)
-    if not origin:
-        return {"ok": False, "out": "GitHub-main konnte nicht ermittelt werden."}
-    alt = str(meta.get("basis") or "–")
-    meta["basis"] = origin
-    try:
-        _gist_schreiben({"aktuell.json": {"content": json.dumps(meta, ensure_ascii=False)}}, token)
-        return {"ok": True, "out": "Basis von %s auf %s gesetzt; Patch und Prüfsumme unverändert." % (alt, origin)}
-    except GistRequestError as e:
-        return {"ok": False, "out": e.out, "loesung": e.loesung}
-
+        _gist_schreiben({"aktuell.json": {"content": json.dumps(candidate, ensure_ascii=False)}}, token)
+    except GistRequestError as exc:
+        return {"ok": False, "out": exc.out, "loesung": exc.loesung}
+    return {"ok": True, "out": "Basis %s → %s gesetzt, nachdem der unveränderte Patch Anwendbarkeitsprüfung bestanden hat." % (old[:7], remote[:7])}
 
 def _data_uri_inhalt(html_text):
     import base64
-
     patch, meta = "", ""
-    for m in re.finditer(r"data:[a-z0-9/+.]+;(?:charset=[^;]+;)?base64,([A-Za-z0-9+/=]+)", html_text):
+    for match in re.finditer(r"data:[A-Za-z0-9/.+-]+;(?:charset=[^;]+;)?base64,([A-Za-z0-9+/=]+)", html_text):
         try:
-            roh = base64.b64decode(m.group(1)).decode("utf-8", "ignore")
+            raw = base64.b64decode(match.group(1), validate=True)
+            if len(raw) > MAX_PATCH_BYTES:
+                continue
+            text = raw.decode("utf-8")
         except Exception:
             continue
-        if "diff --git" in roh and not patch:
-            patch = roh
-        elif '"basis"' in roh and not meta:
-            meta = roh
+        if re.search(r"^diff --git ", text, re.M) and not patch:
+            patch = text
+        elif '"basis"' in text and not meta:
+            meta = text
     return patch, meta
 
-
 def act_patch_von_url(payload):
-    url = (payload.get("url") or "").strip()
+    url = str(payload.get("url") or "").strip()
     if not url:
         return {"ok": False, "out": "Keine Adresse angegeben."}
-    if not url.startswith("http"):
-        url = "https://" + url
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return {"ok": False, "out": "Nur http/https-Adressen sind erlaubt."}
-    host = (parsed.hostname or "").lower()
-    if host not in ("gist.githubusercontent.com", "gist.github.com", "raw.githubusercontent.com", "github.com"):
-        return {
-            "ok": False,
-            "out": "Nicht erlaubte Domain: %s." % (host or "unbekannt"),
-            "loesung": "Aus Sicherheitsgründen sind nur GitHub-/Gist-Adressen erlaubt.",
-        }
+    if not url.startswith("https://"):
+        return {"ok": False, "out": "Bitte eine vollständige HTTPS-Adresse verwenden."}
     try:
-        r = urllib.request.urlopen(url, timeout=25)
-        inhalt = r.read(2_000_000).decode("utf-8", "ignore")
-        basis_url = r.geturl().rsplit("/", 1)[0] + "/"
-    except Exception as e:
-        return {"ok": False, "out": "Adresse nicht erreichbar: " + scrub(str(e), read_token())[:140]}
-    patch, meta = "", ""
-    for name in ("aktuell.patch", "aktuell.json"):
-        try:
-            txt = urllib.request.urlopen(basis_url + name, timeout=15).read(2_000_000).decode("utf-8", "ignore")
-            if name.endswith("patch"):
-                patch = txt
+        data, final_url = _http_bytes(url, MAX_HTTP_BYTES)
+        patch, meta_text = "", ""
+        if data.startswith(b"PK\x03\x04"):
+            found = {}
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                for entry in archive.infolist():
+                    if entry.is_dir():
+                        continue
+                    parts = entry.filename.split("/")
+                    name = parts[-1]
+                    if len(parts) > 2 or name not in ("aktuell.patch", "aktuell.json") or name in found:
+                        raise ValueError("Patch-ZIP muss genau aktuell.patch und aktuell.json enthalten.")
+                    if entry.file_size > (MAX_PATCH_BYTES if name.endswith("patch") else 65536):
+                        raise ValueError("Patch-ZIP enthält eine zu große Datei.")
+                    found[name] = archive.read(entry).decode("utf-8")
+            if set(found) != {"aktuell.patch", "aktuell.json"}:
+                raise ValueError("Patch-ZIP ist unvollständig.")
+            patch, meta_text = found["aktuell.patch"], found["aktuell.json"]
+        else:
+            parsed = urllib.parse.urlparse(final_url)
+            host = (parsed.hostname or "").lower()
+            if host == "gist.github.com" and GIST_ID in parsed.path:
+                patch, meta = _postfach_meta(_gist_lesen(read_token()))
+                meta_text = json.dumps(meta, ensure_ascii=False)
             else:
-                meta = txt
-        except Exception:
-            pass
-    if not patch or not meta:
-        p2, m2 = _data_uri_inhalt(inhalt)
-        patch, meta = patch or p2, meta or m2
-    if not patch:
-        return {"ok": False, "out": "Auf der Seite wurde kein Patch gefunden."}
-    return act_patch_einfuegen({"patch": patch, "meta": meta})
-
+                text = data.decode("utf-8")
+                if re.search(r"^diff --git ", text, re.M):
+                    patch = text
+                    base_url = final_url.rsplit("/", 1)[0]
+                    if host == "github.com" and "/blob/" in parsed.path:
+                        parts = parsed.path.strip("/").split("/")
+                        if len(parts) >= 5:
+                            base_url = "https://raw.githubusercontent.com/" + "/".join(parts[:2] + parts[3:-1])
+                    if urllib.parse.urlparse(base_url).hostname not in ("gist.githubusercontent.com", "raw.githubusercontent.com"):
+                        raise ValueError("Für GitHub bitte einen Raw-Link oder den direkten Patch-ZIP-Link verwenden.")
+                    raw, _ = _http_bytes(base_url + "/aktuell.json", 65536, raw_only=True)
+                    meta_text = raw.decode("utf-8")
+                else:
+                    patch, meta_text = _data_uri_inhalt(text)
+        if not patch or not meta_text:
+            return {"ok": False, "out": "Kein vollständiges Patch-Paket gefunden.",
+                    "loesung": "Direkten ZIP-Link mit aktuell.patch/aktuell.json oder Raw-Patch plus Metadatei verwenden."}
+        return act_patch_einfuegen({"patch": patch, "meta": meta_text})
+    except GistRequestError as exc:
+        return {"ok": False, "out": exc.out, "loesung": exc.loesung}
+    except Exception as exc:
+        return {"ok": False, "out": "Patch-Import gestoppt: " + scrub(str(exc), read_token())[:200],
+                "loesung": "Direkten HTTPS-Link auf das vollständige Patch-ZIP verwenden."}
 
 def act_projekt_diagnose():
     token, proj = read_token(), CFG["projekt"]
-    if not os.path.isdir(proj):
-        return {"ok": False, "out": "Projektordner nicht gefunden: " + proj}
-    st = run(["git", "status", "--porcelain", "-uall"], cwd=proj, token=token)
+    status = run(["git", "status", "--porcelain", "-uall"], cwd=proj, token=token)
     head = run(["git", "rev-parse", "--short", "HEAD"], cwd=proj, token=token)
-    if not st["ok"] or not head["ok"]:
-        return {"ok": False, "out": "Kein Git-Repository unter: " + proj}
-    offene = [z for z in st["out"].splitlines() if z.strip()]
-    zeilen = [
-        "Projekt: %s · HEAD %s · %s"
-        % (proj, head["out"].strip(), "Stand sauber" if not offene else "%d offene Änderung(en)" % len(offene))
-    ]
-    if offene:
-        namen = [z[3:].strip() for z in offene[:6]]
-        zeilen.append("Offene Dateien: " + ", ".join(namen))
-    origin = _origin_main_kurz(proj, token)
-    if origin:
-        zeilen.append("GitHub-main: %s · lokaler HEAD: %s" % (origin, head["out"].strip()))
-        run(["git", "fetch", "origin"], cwd=proj, token=token, timeout=30)
-        cnt = run(["git", "rev-list", "--left-right", "--count", "origin/main...HEAD"], cwd=proj, token=token)["out"].strip()
-        parts = cnt.split()
+    if not status["ok"] or not head["ok"]:
+        return {"ok": False, "out": "Projektordner ist kein lesbares Git-Repository: " + proj}
+    offene = [line for line in status["out"].splitlines() if line.strip()]
+    zeilen = ["Projekt: %s · HEAD %s · %s" % (proj, head["out"].strip(), "Stand sauber" if not offene else "%d offene Änderung(en)" % len(offene))]
+    remote = _remote_main_full(proj, token)
+    if remote:
+        zeilen.append("GitHub-main: %s · lokaler HEAD: %s" % (remote[:7], head["out"].strip()))
+        counts = run(["git", "rev-list", "--left-right", "--count", remote + "...HEAD"], cwd=proj, token=token)
+        parts = counts["out"].split() if counts["ok"] else []
         if len(parts) == 2:
             behind, ahead = parts
-            if behind == "0" and ahead == "0":
-                zeilen.append("Abgleich: lokal und GitHub identisch (0 0).")
-            elif behind == "0":
-                zeilen.append("Abgleich: lokal %s Commit(s) vor GitHub (0 %s) – z. B. noch nicht abgelegt." % (ahead, ahead))
-            elif ahead == "0":
-                zeilen.append("Abgleich: lokal %s Commit(s) hinter GitHub (%s 0) – „Lokal aktualisieren“ drücken." % (behind, behind))
-            else:
-                zeilen.append("Abgleich: DIVERGENZ (%s %s) – %s GitHub-Commits fehlen lokal, %s lokale fehlen auf GitHub. Nichts pushen!" % (behind, ahead, behind, ahead))
+            zeilen.append("Abgleich: GitHub %s voraus · lokal %s voraus (%s %s)." % (behind, ahead, behind, ahead))
     else:
-        zeilen.append("GitHub-main: offline / nicht erreichbar")
-    patch_text = ""
+        zeilen.append("GitHub-main: nicht erreichbar; kein verlässlicher Abgleich.")
+    patch_ok = True
     if token:
         try:
-            data = _gist_lesen(token)
-            patch_text = ((data.get("files") or {}).get("aktuell.patch") or {}).get("content") or ""
-        except GistRequestError as e:
-            zeilen.append("Postfach: " + e.out)
-    gefordert, vorhanden, fehlen = [], [], []
-    if "diff --git" in patch_text:
-        for m in re.findall(r"\+\+\+ b/(\S+)", patch_text):
-            if m not in gefordert:
-                gefordert.append(m)
-        for pfad in gefordert:
-            (vorhanden if os.path.exists(os.path.join(proj, pfad)) else fehlen).append(pfad)
-        zeilen.append(
-            "Patch fordert %d Datei(en): %d vorhanden, %d fehlen%s"
-            % (len(gefordert), len(vorhanden), len(fehlen), (" – fehlt: " + ", ".join(fehlen)) if fehlen else "")
-        )
-        out = "Projekt-Diagnose fertig – " + (
-            "es fehlen Patch-Dateien (noch nicht übernommen)." if fehlen else "alle Patch-Dateien vorhanden."
-        )
+            patch, meta = _postfach_meta(_gist_lesen(token))
+            if not patch and not meta:
+                zeilen.append("Postfach leer.")
+            else:
+                error = _patch_meta_fehler(patch, meta)
+                if error:
+                    zeilen.append("Postfach-Warnung: " + error)
+                    patch_ok = False
+                else:
+                    blocks = _patch_bloecke(patch)
+                    new = [b["path"] for b in blocks if b["new"] and not os.path.exists(os.path.join(proj, b["path"]))]
+                    existing = [b["path"] for b in blocks if not b["new"] and os.path.exists(os.path.join(proj, b["path"]))]
+                    missing = [b["path"] for b in blocks if not b["new"] and not b["deleted"] and not os.path.exists(os.path.join(proj, b["path"]))]
+                    zeilen.append("Patch betrifft %d Dateiabschnitt(e): %d bereits vorhanden, %d neu vorgesehen%s." %
+                                  (len(blocks), len(existing), len(new), ("; neu: " + ", ".join(new)) if new else ""))
+                    if missing:
+                        zeilen.append("Basisdateien fehlen lokal: " + ", ".join(missing))
+                    _, basis_error = _basis_gleich(meta, proj, token)
+                    if basis_error:
+                        zeilen.append(basis_error["out"])
+                        patch_ok = False
+                    zeilen.append("Dateiexistenz allein beweist keine Patch-Übernahme; Dafür sind Prüfsumme, Basis und Git-Anwendung zuständig.")
+        except GistRequestError as exc:
+            zeilen.append("Postfach: " + exc.out)
+            patch_ok = False
     else:
-        zeilen.append("Kein lesbarer Patch im Postfach." if token else "Kein Token – Postfach nicht gelesen.")
-        out = "Projekt-Diagnose fertig – Projektstatus aufgenommen."
-    return {"ok": True, "zeilen": zeilen, "out": out, "offen": len(offene), "github_main": origin}
-
+        zeilen.append("Kein Token – Postfach nicht gelesen.")
+    return {"ok": patch_ok, "zeilen": zeilen, "offen": len(offene), "github_main": remote[:7],
+            "out": "Projekt-Diagnose fertig – Patch-Inhalt erfasst; Übernahme nicht durch Dateiexistenz bewiesen." if patch_ok else "Projekt-Diagnose fertig – Postfachprüfung erfordert Aufmerksamkeit."}
 
 def _sha_varianten(text):
     varianten = set()
@@ -1947,65 +2066,37 @@ def act_patch_einfuegen(payload):
     token = read_token()
     if not token:
         return _token_fehlt()
-    patch = (payload.get("patch") or "").strip()
-    meta_text = (payload.get("meta") or "").strip()
-    if not patch or not re.search(r"(^|\n)diff --git ", patch):
-        return {"ok": False, "out": "Kein gültiger Patch-Text (diff --git fehlt)."}
-    if len(patch.encode("utf-8", "ignore")) > 200 * 1024:
-        return {"ok": False, "out": "Der Patch ist zu groß (über 200 KB)."}
+    patch = payload.get("patch") or ""
+    meta_text = str(payload.get("meta") or "").strip()
+    if len(meta_text.encode("utf-8")) > 65536:
+        return {"ok": False, "out": "aktuell.json ist zu groß (maximal 64 KiB)."}
     try:
         meta = json.loads(meta_text)
     except Exception:
-        return {"ok": False, "out": "Die json mit der Basis fehlt oder ist nicht lesbar."}
-    basis = str(meta.get("basis") or "").strip()
-    if not basis:
-        return {"ok": False, "out": "In der json fehlt „basis“ – ohne Basis kein Ablegen."}
-    patch, entfernt = _filtere_bereits_vorhandene(patch, CFG["projekt"])
-    if not re.search(r"^diff --git ", patch, flags=re.M):
-        return {
-            "ok": True,
-            "info": True,
-            "out": "Nichts einzutragen – nur bereits vorhandene Dateien: " + ", ".join(entfernt),
-        }
-    stat = run(["git", "apply", "--stat", "-"], cwd=CFG["projekt"], input_text=patch, token=token)
-    if not stat["ok"]:
-        return {
-            "ok": False,
-            "out": "Patch ist unvollständig oder defekt (" + git_klar(stat["out"]) + ")",
-            "loesung": "KI den Patch komplett neu liefern lassen – am besten als Datei/ZIP („KI-Anfrage kopieren“), nicht als Chat-Text.",
-        }
-    dateien = []
-    for m in re.findall(r"\+\+\+ b/(\S+)", patch):
-        if m not in dateien:
-            dateien.append(m)
-    titel = str(meta.get("titel") or "").strip() or (dateien[0] if dateien else "eingefügter Patch")
-    sha = hashlib.sha256(patch.encode("utf-8", "ignore")).hexdigest()[:16]
-    mitgeliefert = str(meta.get("sha256") or "").strip().lower()
-    sha_hinweis = ""
-    if mitgeliefert and mitgeliefert not in _sha_varianten(patch):
-        sha_hinweis = (
-            "Mitgelieferte Prüfsumme %s weicht ab; frisch berechnet: %s (BOM/Zeilenenden möglich)."
-            % (mitgeliefert, sha)
-        )
-    neu = {"datei": "aktuell.patch", "sha256": sha, "titel": titel, "basis": basis}
+        return {"ok": False, "out": "aktuell.json fehlt oder ist nicht lesbar."}
+    error = _patch_meta_fehler(patch, meta)
+    if error:
+        return {"ok": False, "out": error, "loesung": "Originaldatei unverändert liefern; Prüfsumme wird niemals stillschweigend ersetzt."}
+    proj = CFG["projekt"]
+    secret = _patch_secret_fehler(patch, token)
+    if secret:
+        return {"ok": False, "out": secret}
+    error = _patch_parse_check(patch, proj, token)
+    if error:
+        return error
+    _, basis_error = _basis_gleich(meta, proj, token)
+    if basis_error:
+        return basis_error
     try:
-        _gist_schreiben(
-            {
-                "aktuell.patch": {"content": patch},
-                "aktuell.json": {"content": json.dumps(neu, ensure_ascii=False)},
-            },
-            token,
-        )
-        hinweis = (" Entfernt: " + ", ".join(entfernt)) if entfernt else ""
-        return {
-            "ok": True,
-            "sha_info": sha_hinweis,
-            "out": "Patch ins Postfach gelegt: %d Datei(en), Prüfsumme %s, Basis %s.%s"
-            % (len(dateien), sha, basis, hinweis),
-        }
-    except GistRequestError as e:
-        return {"ok": False, "out": "Ins Postfach legen fehlgeschlagen: " + e.out, "loesung": e.loesung}
-
+        old_patch, old_meta = _postfach_meta(_gist_lesen(token))
+        if old_patch or old_meta:
+            return {"ok": False, "out": "Postfach bereits belegt – eingehender Patch nicht überschrieben.",
+                    "loesung": "Unter Wartung „Alten Patch entfernen“ verwenden, danach erneut eintragen."}
+        _gist_schreiben({"aktuell.patch": {"content": patch}, "aktuell.json": {"content": json.dumps(meta, ensure_ascii=False)}}, token)
+    except GistRequestError as exc:
+        return {"ok": False, "out": exc.out, "loesung": exc.loesung}
+    paths = list(dict.fromkeys(block["path"] for block in _patch_bloecke(patch)))
+    return {"ok": True, "out": "Patch unverändert abgelegt und zurückgelesen: %d Datei(en), Prüfsumme %s, Basis %s." % (len(paths), str(meta["sha256"])[:16], str(meta["basis"])[:7])}
 
 def act_postfach_leeren():
     token = read_token()
@@ -2194,7 +2285,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         fp = os.path.join(HERE, p)
         if not os.path.isfile(fp):
-            self._json(404, {"ok": False, "out": "nicht gefunden: " + p})
+            self._json(404, {
+                "ok": False,
+                "out": "GUI-Datei nicht gefunden: " + fp,
+                "ordner": HERE,
+                "erwartet": fp,
+                "prozess_pid": os.getpid(),
+                "loesung": "Diesen Helfer beenden und genau den Ordner neu starten, der die index.html enthaelt: bash " + os.path.join(HERE, "neustart.sh"),
+            })
             return
         ctype = (
             "text/html; charset=utf-8"
@@ -2227,7 +2325,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self._pruefe_lokal_sicherheit():
             return
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if length > 2_100_000:
+        if length > MAX_HTTP_BYTES + 65_536:
             self._json(413, {"ok": False, "out": "Anfrage zu groß."})
             return
         body = self.rfile.read(length).decode("utf-8") if length else ""
@@ -2285,16 +2383,34 @@ def open_browser(url):
 
 
 def main():
+    import errno
+    import shlex
+
+    gui_path = os.path.join(HERE, "index.html")
+    if not os.path.isfile(gui_path):
+        print("Projektmanager wurde NICHT gestartet: index.html fehlt am Helfer-Ort.", flush=True)
+        print("Erwartete Datei: " + gui_path, flush=True)
+        print("Helfer-Ordner: " + HERE, flush=True)
+        print("Das Projekt-Pfadfeld in Einstellungen ist nicht der Helfer-Ordner. Das Paket vollstaendig in einen Ordner entpacken; keinen laufenden Ordner verschieben.", flush=True)
+        return 1
+
     port = int(CFG.get("port", 8790))
     url = "http://127.0.0.1:%d/" % port
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     socketserver.ThreadingTCPServer.daemon_threads = True
     try:
         httpd = socketserver.ThreadingTCPServer(("127.0.0.1", port), Handler)
-    except OSError:
-        print("Projektmanager läuft bereits. Öffne den Browser: " + url, flush=True)
-        open_browser(url)
-        return
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            print("Port %d ist bereits belegt. Dieser Helfer wurde NICHT gestartet." % port, flush=True)
+            print("Ein anderer Prozess oder ein alter Helfer kann diese Adresse bedienen. Das ist keine Erfolgsmeldung.", flush=True)
+        else:
+            print("Helfer konnte Port %d nicht öffnen: %s" % (port, exc), flush=True)
+            print("Dieser Helfer wurde NICHT gestartet; es wurde kein Browser geöffnet.", flush=True)
+        print("Vorgesehener Helfer-Ordner: " + HERE, flush=True)
+        print("GUI-Datei vorhanden: " + gui_path, flush=True)
+        print("Gezielter Neustart aller erkannten Projektmanager-Helfer: bash " + shlex.quote(os.path.join(HERE, "neustart.sh")), flush=True)
+        return 1
     print("Projektmanager %s läuft → %s" % (HELPER_VERSION, url), flush=True)
     print("Ordner: " + HERE, flush=True)
     with open(PID_FILE, "w", encoding="utf-8") as f:
@@ -2320,7 +2436,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
 </script>
 <script type="text/plain" id="src-historie">
 # HISTORIE · Adventshaus · Leitstand
@@ -3067,6 +3183,43 @@ Dateien `projektmanager.py`/`projektmanager.js`/`projektmanager.pid`, Header
 älteren Icons automatisch auf), ZIP `projektmanager-23.42.zip`. GUI-Name bleibt
 „Projektmanager". Regel: Ordner niemals umbenennen/verschieben, während der Helfer
 läuft (sonst: „index.html nicht gefunden") — erst `pkill -f projektmanager.py`.
+
+
+## 23.42 · Arbeitsrevision pfad-diagnose.1 (nicht auf GitHub veröffentlicht)
+
+Ausgangspunkt: Chihuaua/kipm, Commit 379c824217ac3ac5d7059cfef740f6d30eefd0e1.
+Der GitHub-Referenzklon bleibt unverändert. Keine Änderungen an GUI-Anordnung,
+Knopfbeschriftungen, Aktionsreihenfolge, CSS, JavaScript oder Dateinamen.
+
+- Der Helfer prüft index.html vor dem Binden am eigenen Dateiordner.
+- Fehlende GUI-Dateien werden mit vollständigem erwartetem Pfad und Prozess-PID gemeldet.
+- Ein belegter Port wird nicht mehr als erfolgreicher Helferstart ausgegeben.
+- Andere Bindefehler werden ehrlich gemeldet; kein Browser wird fehlgeleitet.
+- Der Status enthält GUI-Pfad, Verfügbarkeit und Arbeitsrevision; GUI/Helfer bleiben 23.42.
+- Ein bereits laufender alter Prozess übernimmt diese Korrekturen erst nach einem Neustart.
+- Die sichtbare GUI und projektmanager.js bleiben bytegleich zur GitHub-Vorlage.
+
+
+## 23.42 · Arbeitsrevision uebergabe-pruefung.1 (nicht auf GitHub veröffentlicht)
+
+- Exakte Patch-Prüfsummen; keine stille Neuberechnung und kein Beschneiden der Patch-Bytes.
+- Vollständiges Nachladen abgeschnittener Gist-Dateien über raw_url; Upload wird zurückgelesen.
+- Keine stillen Dateifilter; Mail-Patches und Plain-Diffs werden passend verarbeitet.
+- Basisprüfung mit kurzen und vollständigen Hashes gegen den tatsächlich entfernten main-Stand.
+- Keine Zweig-Überschreibung; Buildfehler ohne Push; PR-Fehler ohne falsche Erfolgsmeldung.
+- Neue Patch-Dateien werden in der Diagnose als neu vorgesehen statt als Projektfehler gemeldet.
+- Übergabenotiz ist idempotent und erzeugt keinen automatischen Commit mehr.
+- Direkter HTTPS-Import von Patch-ZIPs und Raw-Patches mit Größen- und Adressprüfung.
+- Offline-Regressionstests mit lokalen Repositories und simuliertem gh; keine echten GitHub-Schreibzugriffe.
+
+
+## 23.42.01 — fortlaufende Versionsnummer und geprüfte Übergabe
+
+- Aktive Versionierung beginnt bei 23.42.01; weitere Änderungen folgen als 23.42.02, 23.42.03 usw.
+- GUI_VERSION, HELPER_VERSION und GUI_HINT zeigen dieselbe aktive Version.
+- Versionsvergleich prüft alle Nummernsegmente statt parseFloat.
+- Der bestehende Installationsordner projektmanager-23.42 bleibt bewusst stabil.
+- Enthält die zuvor offline geprüften Pfad- und Übergabekorrekturen; keine echten GitHub-Schreibzugriffe bei der Prüfung.
 </script>
 <script id="appScript">
 (function(){
@@ -3075,12 +3228,23 @@ läuft (sonst: „index.html nicht gefunden") — erst `pkill -f projektmanager.
    Adventshaus · Projektmanager: Oberfläche mit Demo- und Echtbetrieb
    ============================================================ */
 
-var GUI_VERSION = "23.42";
+var GUI_VERSION = "23.42.01";
 var EROEFFNUNG = "Repository: https://github.com/Chihuaua/adventshaus – Stand: main\n" +
 "Lies README.md komplett, besonders „Grundsätze“, „Arbeitsablauf mit KI-Assistenten“ und „Regel 0“. Halte dich daran.\n\n" +
 "Regel 0: Klone den Stand und führe ihn aus – baue ihn nicht nach. Ändere nichts, was ich nicht verlange: keine Texte, Erklärungen, Buttons, Styles oder Größen hinzufügen oder anpassen. Nur die Aufgabe unten.\n\n" +
 "Ablauf: 1) klonen, npm ci, npx tsc --noEmit, npm run build – bestätige, dass es baut. 2) Frag mich nach dem Postfach-Token (ich schicke es in zwei Hälften). 3) Setze die Aufgabe um und zeig sie mir lauffähig. 4) Erst nach meinem „ja“: Patch + Prüfsumme ins Postfach. Ich übernehme per Knopf.\n\n" +
 "Aufgabe: Noch keine. Klone den Stand, zeig ihn mir unverändert, frag nach dem Token – dann sage ich dir, was zu tun ist.";
+
+function versionsVergleich(a,b){
+  var links=String(a||"").split("."),rechts=String(b||"").split(".");
+  for(var i=0;i<Math.max(links.length,rechts.length);i++){
+    var x=parseInt(links[i]||"0",10),y=parseInt(rechts[i]||"0",10);
+    if(!isFinite(x)||!isFinite(y)) return 0;
+    if(x>y) return 1;
+    if(x<y) return -1;
+  }
+  return 0;
+}
 
 var API = {
   pruefbericht:{method:"GET", pfad:"/api/pruefen"},
@@ -4089,8 +4253,8 @@ async function detecteModus(){
     if (j.cfg) Object.keys(ZUSTAND.cfg).forEach(function(k){if (j.cfg[k]!=null) ZUSTAND.cfg[k]=j.cfg[k];});
     aktualisiereFussPfade();
     if (ZUSTAND.versionKonflikt){
-      var a=parseFloat(ZUSTAND.helperVersion),b=parseFloat(GUI_VERSION);
-      var richtung=(isFinite(a)&&isFinite(b)&&a>b)?"Die GUI ist älter als der Helfer":"Der Helfer ist älter als die GUI";
+      var neuer=versionsVergleich(ZUSTAND.helperVersion,GUI_VERSION);
+      var richtung=neuer>0?"Die GUI ist älter als der Helfer":neuer<0?"Der Helfer ist älter als die GUI":"Versionsangaben unterscheiden sich";
       setzeBanner("fehler",{helfer:ZUSTAND.helperVersion,richtung:richtung});
     }else{
       setzeBanner("echt",{helfer:ZUSTAND.helperVersion,ordner:ZUSTAND.ordner,host:location.host});
