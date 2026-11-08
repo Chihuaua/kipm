@@ -1,0 +1,36 @@
+PROJEKTMANAGER 23.42 — INSTALLATION
+====================================
+
+1) ENTPACKEN
+   Diese ZIP entpacken → Ordner "projektmanager-23.42" (eine Ebene,
+   NICHT verschachtelt: falsch wäre …/projektmanager-23.42/projektmanager-23.42/).
+
+2) STARTEN
+   Terminal:
+     cd /PFAD/ZUM/ORDNER
+     bash start.sh
+   → Das Fenster öffnet sich unter http://127.0.0.1:8790/
+     (ohne Helfer: gelber Demo-Banner; mit Helfer: grüner Echtbetrieb-Banner).
+
+3) EINMALIG: DESKTOP-KNOPF
+     bash install-desktop.sh
+   → Legt den Schreibtisch-Knopf "Projektmanager" an und räumt ältere
+     Icons (Leitstand-*, Kipm, kipm) automatisch auf.
+
+4) TOKEN (für den Echtbetrieb)
+   GUI → MEHR → Einstellungen → Token einfügen → Speichern → "Echt testen".
+   Empfohlen: Token mit NUR Gist-Rechten.
+   Wird gespeichert unter ~/.config/adventshaus/gist-token (Rechte 600),
+   also außerhalb von GUI und Projektordner.
+
+BEENDEN:   bash stop.sh        (oder: pkill -f projektmanager.py)
+NEUSTART:  bash neustart.sh    (alle Helfer stoppen + diesen neu starten)
+
+GOLDENE REGEL:
+   Den Ordner NIEMALS umbenennen oder verschieben, solange der Helfer läuft!
+   Sonst meldet der Browser "index.html nicht gefunden" (Prozess hängt am
+   alten Pfad). Richtig: erst stoppen, dann umziehen, dann neu starten.
+
+WEITERE DOKUMENTATION:
+   - README.md (im Paket)
+   - DOKU/pruefplan-uebergabe-23.42.txt (Prüfplan, Fortschritt, KI-Übergabe)

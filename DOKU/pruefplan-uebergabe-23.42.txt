@@ -1,0 +1,271 @@
+PROJEKTMANAGER (ADVENTSHAUS) v23.42 — PRÜFPLAN, FORTSCHRITT & ÜBERGABE-PROMPT
+==========================================================================
+Erstellt: 07.11.2026 · durch KI-B (unabhängige Prüfung + gemeinsamer Live-Test)
+Zweck:  Diese Datei macht eine neue, untrainierte KI-Sitzung (oder den Besitzer)
+        startklar, um den Live-Test zu Ende zu führen und aufzuräumen.
+        LIES VOLLSTÄNDIG, BEVOR DU IRGENDWAS TUST.
+
+
+1. ZUSTANDSKURZBILD (Stand: 07.11.2026, ~12:00 Uhr)
+--------------------------------------------------------------------------
+- Laufend:          Helfer + GUI beide Version 23.42, Echtbetrieb, 127.0.0.1:8790
+                    (Stand ~13:00: Helfer gestoppt und verifiziert; Start per "bash start.sh"
+                    oder über die neuen Desktop-Knöpfe)
+- Helfer-Ordner:    ~/Schreibtisch/projektmanager-23.42
+                    (DIREKT verwenden — KEINE weiteren ZIP-Entpackungen mehr!)
+- Projekt:          /home/pq/projekte/adventshaus
+                    main = 630c956 = origin/main (nach N3-Volltest + Revert-PR #26),
+                    Arbeitsbaum sauber, nur Zweig "main", check.sh 134/134 OK
+- Token:            ~/.config/adventshaus/gist-token (Rechte 600, Fine-Grained, NUR Gist-Zugriff,
+                    GUI "Echt testen" = "Token gültig · Gist-Zugriff bestätigt")
+- Postfach-Gist:    f28cc85bf67f8a7f2fa6251a2092a33c — LEER (Test-Patch entfernt und
+                    verifiziert am 07.11.2026, 12:04 Uhr via "Stand prüfen")
+- Sicherung:        ~/sicherung/adventshaus.git (Bare-Spiegel, Stand 2aecf78 bei Prüfbericht)
+- Desktop:          beide Icons zeigen auf den 23.38-Ordner (install-desktop.sh, 12:0x Uhr)
+
+
+2. LIVE-TEST — ERGEBNISSE
+--------------------------------------------------------------------------
+BESTANDEN:
+  [OK] T1  Start 23.38, grünes Banner "Echter Modus · Version 23.38 (GUI 23.38)"
+  [OK] T2  Token-Echttest: "Token gültig · Postfach-Gist erreichbar (Fine-Grained / Gist-Zugriff bestätigt)"
+  [OK] T3  Stand prüfen + Divergenz-Analyse (3/3): lokale Commits waren nur Helfer-Auto-Notizen,
+           GitHub-Seite ohne Dateiänderungen → Ausrichtung "git checkout -B main origin/main"
+  [OK] T4  Geheimnis-Schutz, zwei Linien:
+           a) .env.test → von .gitignore-Regel ".env.*" (Zeile 5) unsichtbar gemacht,
+              Helfer meldet EHRlich: "Git sieht keine speicherbaren Änderungen. 4 ignorierte
+              Datei(en) liegen bewusst unverfolgt im Projektordner: …" (statt falschem "Alles gespeichert")
+           b) gist-token-kopie (git-sichtbar) → rote Blockade:
+              "Speichern gestoppt – potenziell geheime Datei(en) erkannt: gist-token-kopie." + Lösung
+  [OK] T5  Phase B: Dummy-Datei docs/test-v2337.md via GUI committet (f8eedf0), Status sauber
+  [OK] T6  "Ins Postfach legen": Multi-Commit-Export ins Gist ("1 Commit(s)", Basis a91e7f6);
+           "Stand prüfen" zeigt "Patch fordert 1 Datei(en): 1 vorhanden, 0 fehlen"
+  [OK] T7  "Projekt Prüfbericht holen": "Postfach-Basis: Basis a91e7f6 passt zu GitHub-main",
+           check.sh 134/134 OK, git status leer
+  [OK] T8  Überschreibschutz: zweites "Ins Postfach legen" → Warnung statt stiller Überschreibung
+  [OK] T9  Aufräumen: "git reset --hard a91e7f6" → HEAD = a91e7f6, docs/test-v2337.md gelöscht
+
+ERLEDIGT AM 07.11.2026 (verifiziert):
+  [OK] N1  "Alten Patch entfernen" → Postfach leer (12:04 Uhr via "Stand prüfen": "Kein lesbarer Patch im Postfach.")
+  [OK] N2  "Stand prüfen" → "HEAD a91e7f6 · Stand sauber", "GitHub-main: a91e7f6 · lokaler HEAD: a91e7f6"
+  [OK] N5  install-desktop.sh → beide Desktop-Icons zeigen auf den 23.38-Ordner
+
+ERLEDIGT AM 07.11.2026 (Fortsetzung):
+  [OK] N4  Aufräumen der Altlasten (komplett):
+       a) Papierkorb: Projektmanager-Kopien gelöscht (vom Besitzer)
+       b) ~/Schreibtisch/adventshaus-kipm-23.34 + alte Desktop-Verknüpfungen entfernt (vom Besitzer)
+       c) Zweige: 19 gemergte ki/*-Zweige mit "git branch -d" gelöscht; ki/datenkoffer
+          (verifiziert = nur 3 "docs: Übergabedatei"-Auto-Commits) mit "git branch -D" gelöscht.
+          Ergebnis verifiziert: "git branch" zeigt nur noch "* main".
+
+GUI 23.38 (07.11.2026, auf Besitzerwunsch):
+  [OK] Kette-Leiste OBEN: 4 Chips (Übergabe / Sicherung / Prüfung / Wartung) wählen die
+       Kette; die aktive Kette ist oben UND an der Gruppenüberschrift markiert
+       ("läuft · Schritt X/Y"). Zweiter Klick auf die aktive Kette beendet sie.
+       (Auch Start über die Gruppenüberschrift markiert die Kette oben.)
+  [OK] Gruppenreihenfolge = Arbeitsfluss, Dopplungen erlaubt: "Stand prüfen" beginnt
+       die Ketten 01, 02 und 03; "Alten Patch entfernen" schließt Kette 01 ab (Duplikat 04).
+  [OK] Denkfenster-Farben: positiv grün, Hinweise blau, Warnungen/Fehler rot.
+  [OK] JETZT-DRAN-Logik unverändert (zeigt immer den nächsten Schritt).
+
+GUI 23.39 (07.11.2026, auf Besitzerwunsch „alles ohne Terminal?"):
+  [OK] Neuer Knopf „Lokal aktualisieren" (Gruppe 02): git pull --ff-only origin main.
+       Übernimmt nach einem PR-Merge den GitHub-Stand lokal — nur bei sauberem Stand,
+       bei Divergenz ehrlicher Abbruch. Testfälle (aktuell/pull/dreckig/divergent)
+       automatisiert verifiziert.
+  [OK] In Kette 02 und Standardreihenfolge eingebunden: … → zu GitHub →
+       lokal aktualisieren → nach Hause.
+
+TERMINAL-FREIER BETRIEB (Stand 23.39):
+  - VOLLSTÄNDIG OHNE TERMINAL: Start/Stop (Desktop-Knöpfe), prüfen, speichern,
+    Postfach, KI-Übergabe, „Patch zu GitHub", Merge im Browser, „Lokal aktualisieren",
+    „nach Hause", Token (Speichern/Testen/Entfernen), Pfade (Einstellungen), Spiel.
+  - NOCH TERMINAL (Nur Einmal-Sachen/Incidents):
+    a) Erstinstallation/Versionwechsel: ZIP entpacken, install-desktop.sh einmalig.
+    b) Zweig-Aufräumen nach Merges: git branch -D … / git push origin --delete …
+    c) Incident-Diagnosen (z. B. Zombie-Helfer s. F1).
+    d) Echte Code-Änderungen (Editor/KI — kein Terminal im engen Sinne).
+
+GUI 23.40 (07.11.2026, auf Frage „alles ohne Terminal?"):
+  [OK] Neuer Knopf „Zweige aufräumen" (Gruppe 04): entfernt NUR gemergte ki/*-Zweige
+       (lokal -d, remote --delete); nicht gemergte Zweige nur aufgelistet, nie berührt.
+       (Test: gemerged lokal+remote gelöscht, offener Zweig unverändert — verifiziert.)
+  [OK] Dritter Desktop-Knopf „Adventshaus · Projektmanager neu starten" (neustart.sh):
+       beendet ALLE Helfer (auch aus anderen Ordnern) und startet den aus dem Paket-Ordner.
+  [OK] „Stand prüfen" zeigt jetzt den Abgleich lokal vs. GitHub: „(0 0) identisch",
+       „(0 N) lokal N vor", „(N 0) lokal N hinter (→ Lokal aktualisieren)",
+       „(N M) DIVERGENZ – nichts pushen".
+
+TERMINAL-FREIER BETRIEB (Stand 23.40):
+  - VOLLSTÄNDIG OHNE TERMINAL: Start/Stop/NEUSTART (3 Desktop-Knöpfe), prüfen (inkl.
+    Abgleich), speichern, Postfach, KI-Übergabe, „Patch zu GitHub", Merge im Browser,
+    „Lokal aktualisieren", „nach Hause", „Zweige aufräumen", Token, Pfade, Spiel.
+  - NOCH TERMINAL (Nur Einmal-Sachen/Extreme):
+    a) Erstinstallation/Versionwechsel: ZIP entpacken, install-desktop.sh einmalig.
+    b) Extrem-Incidents, die über den „Neu starten"-Knopf hinausgehen (s. Anhang A2).
+    c) Echte Code-Änderungen (Editor/KI — kein Terminal im engen Sinne).
+
+GUI 23.41 (07.11.2026, auf Wunsch):
+  [OK] Statusbalken: Im Denkfenster ersetzt ein animierter, gestreifter Balken
+       (türkis, läuft während jeder Aktion, blendet danach aus) das drehende
+       Spinner-Symbol. Status-Text und Ampel unverändert.
+
+GUI 23.42 (07.11.2026, auf Wunsch):
+  [OK] Werkzeugleiste oben in der GUI (unter der Kette-Leiste): die 3 System-Knöpfe
+       „▶ Starten“ (Status-Hinweis), „↻ Neu starten“ und „■ Beenden“ in einer
+       kompakten Leiste, mit Inline-Bestätigung (Ja/Nein) vor Neustart/Beenden.
+  [OK] Helfer-Endpunkte: POST /api/beenden (sauberer Ausstieg, PID aufgeräumt),
+       POST /api/neustart (startet Helfer aus dem Paket-Ordner neu, Seite lädt neu).
+  [OK] install-desktop.sh legt genau EIN Icon an und entfernt die alten
+       „beenden“/„neustart“-Icons automatisch.
+  [OK] Start bevorzugt ein Browser-freies App-Fenster (chromium/google-chrome --app),
+       sonst Standardsbrowser wie bisher.
+
+  [OK] Namensänderung: Die GUI heißt fortan „Projektmanager" (Fenster-Titel, Kopfzeile,
+       Dialoge, Desktop-Icon, Meldungen). Dateinamen/Ordner/ZIP bleiben unverändert.
+       Browser-Hinweis: Mit Librewolf/Firefox bleibt die Menüleiste (kein App-Modus);
+       Chromium/Chrome/Edge/Brave/Vivaldi daneben → automatisch sauberes Fenster.
+
+ALLES ERLEDIGT — offene Test-Schritte: keine.
+ERLEDIGT AM 07.11.2026 (N3-Volltest, mit Einverständnis des Besitzers):
+  [OK] N3  Volltest des PR-Weges — KOMPLETT DURCHGELAUFEN:
+       - "Patch zu GitHub" hat die ganze Kette live bewiesen: Gist lesen → Prüfsumme → Basis →
+         apply --check → Zweig ki/… → git am → tsc OK → npm run build OK → Push → PR #24 geöffnet
+         → Arbeitsbaum automatisch zurück auf main.
+       - Der empfangsseitige Filter wurde ebenfalls live verifiziert: liegt die Patch-Datei
+         bereits lokal, meldet "Patch zu GitHub" sauber "Nur bereits vorhandene Dateien im
+         Patch … – nichts Neues zu übernehmen" (nichts verändert).
+       - Zwischenfall (gelernt): PR #24 wurde versehentlich GEMERGT statt geschlossen.
+         Revert-Commit 90fcafe wurde per PR #26 (Zweig ki/revert-24-b) sauber gemergt →
+         finaler main = 630c956, Test-Datei wieder entfernt, alle Zweige gelöscht.
+       - PR #25 (toter Zweig) kann auf GitHub per "Close" abgeschlossen werden (kosmetisch).
+
+
+3. TEST-REZEPTE (wiederholbar, für Regressionstests)
+--------------------------------------------------------------------------
+  [R1] Geheimnis-Guard:
+       echo x > ~/projekte/adventshaus/gist-token-kopie
+       → GUI "Offene Änderungen speichern" → rote Blockade erwartet → danach:
+       rm ~/projekte/adventshaus/gist-token-kopie
+  [R2] Ignorierte Dateien:
+       echo x > ~/projekte/adventshaus/.env.test
+       → GUI "Offene Änderungen speichern" → Meldung mit "ignorierte Datei(en)" (KEIN Commit)
+       → danach: rm ~/projekte/adventshaus/.env.test
+  [R3] Multi-Commit-Export:
+       zwei Dummy-Commits via GUI anlegen → "Ins Postfach legen" → "(2 Commit(s))" erwartet
+       → danach Postfach leeren + "git reset --hard <Hash-vorher>"
+  [R4] Überschreibschutz:
+       "Ins Postfach legen" zweimal hintereinander → zweites Mal Warnung +
+       Knopf "Trotzdem überschreiben" (NUR mit Einverständnis klicken)
+  [R5] Token-Test:
+       GUI Einstellungen → "Echt testen" → "Token gültig … Gist-Zugriff bestätigt"
+       (Warnung "zu weit berechtigt" anzeigen, falls repo-Scopes auftauchen)
+
+
+4. PROMPT FÜR DIE FORTSETZENDE KI (kompletter Block zum Kopieren)
+--------------------------------------------------------------------------
+--- BEGIN PROMPT ---
+Du bist die neue fortsetzende KI-Sitzung für "Projektmanager" (früher "Adventshaus · Projektmanager", v23.42:
+Desktop-GUI index.html + Python-Helfer projektmanager.py, nur 127.0.0.1:8790) und das
+Spielprojekt "Adventshaus" unter /home/pq/projekte/adventshaus.
+LIES ZUERST die Datei "Prüfplan, Fortschritt & Übergabe" (diese Datei) vollständig.
+
+Dein Auftrag: Der Live-Test, das Aufräumen UND der N3-Volltest (inkl. Revert) sind am
+07.11.2026 ABGESCHLOSSEN und verifiziert — das System ist betriebsbereit, es gibt
+keine offenen Test-Schritte. Führe neue Aufgaben des Besitzers nach diesem Muster aus:
+(a) EINE konkrete Anweisung an den Besitzer
+(GUI-Klick-Name oder Terminal-Befehl, Pfade IMMER als "cd ~/…"), (b) das erwartete
+Ergebnis wörtlich benennen, (c) erst weitermachen, wenn das Ergebnis eingetroffen ist.
+
+Harte Regeln:
+1. Jede schreibende Aktion (GUI oder Terminal) erst NACH Bestätigung des Besitzers.
+2. Der GitHub-Token besitzt NUR Gist-Rechte. Niemals repo-/project-/admin-Rechte
+   verlangen, in Befehle einbauen oder in Ausgaben zitieren.
+3. Ein Terminal reicht; das Helfer-Terminal ist nach "bash start.sh" BELEGT
+   (exec python) — Befehle in einem zweiten Terminal.
+4. Ehrliche Meldungen: nie "erledigt", was nicht verifiziert wurde. Antworten kurz
+   (unter 30 Zeilen), NIE Screenshots anfordern (Chat hat Upload-Größenprobleme),
+   nur kurze Textausgaben.
+5. GUI und Helfer müssen die gleiche Versionsnummer zeigen (23.42). Bei Diskrepanz:
+   Helfer stoppen ("bash stop.sh" im Helfer-Ordner) und neu starten.
+6. Helfer-Ordner: ~/Schreibtisch/projektmanager-23.42
+   — direkt verwenden, KEINE ZIP-Entpackungen, keine neuen Ordner.
+7. Projekt-Repository: Stand 07.11.2026 ist main = 630c956 (lokal = origin/main).
+   Änderungen an main gehen NUR per Pull Request (Repo-Regel, s. F7) — NIE direkt
+   pushen auf main. Zweig-Pushes und PRs nur mit Einverständnis des Besitzers;
+   Zweige erst löschen, nachdem der PR gemerged ist (s. F8).
+8. Falls du etwas nicht prüfen kannst: schreibe es OFFEN, statt es zu vermuten.
+--- END PROMPT ---
+
+
+5. BEKANNTE FEHLER / ERFAHRUNGEN AUS DEM TEST (nicht erneut suchen!)
+--------------------------------------------------------------------------
+  [F1] Zombie-Helfer: Ein Helfer aus einem gelöschten/Mülleimer-Ordner hält Port 8790.
+       Symptom: "bash start.sh" meldet "läuft bereits", Browser zeigt JSON
+       {"ok": false, "out": "nicht gefunden: index.html"}.
+       Diagnose: for p in $(pgrep -f projektmanager.py); do readlink /proc/$p/cwd; done
+       Fix:      pkill -f projektmanager.py   (danach pgrep muss leer sein)
+  [F2] Dateimanager benennt jede ZIP-Entpackung um ("… (1)", "… (59)" …) → viele
+       Kopien, teils unvollständig. Lösung: NUR den einen Helfer-Ordner (Punkt 6) nutzen.
+  [F3] git-ignorierte Dateien (z. B. .env*, *.bak) sind dem Geheimnis-Guard unsichtbar
+       (by Design) — die .gitignore ist erste Linie, der Guard zweite Linie für
+       git-SICHTBARE Dateien. Die GUI meldet ignorierte Dateien ehrlich mit Namen.
+  [F4] Chat-Upload-Größen: lange check.sh-Ausgaben und Screenshots das Chat-Limit
+       sprengen. Neue Sitzungen: nur kurze Textausgaben anfordern.
+  [F5] "git status" zeigt ignorierte Dateien nur mit "--ignored" — der Helfer macht
+       das seit 23.38 selbst (akt_offene_speichern).
+  [F6] Beendigungsfenster-DESIGN (funktionell ist stop.sh einwandfrei, verifiziert am
+       07.11.2026: Helfer wird sauber beendet, pgrep leer). Zenity 4.2.2 (GTK4) hat
+       die --css-Option entfernt → Fallback auf schmales System-Fenster. FIX BEREITS
+       IM PAKET: stop.sh bevorzugt jetzt kdialog (natives dunkles KDE-Fenster),
+       zenity nur Fallback. Vom Besitzer vertagt ("Funktion vor Design") — anwenden:
+       aktuelle stop.sh aus dem Paket/Vorschau-Ordner in den Helfer-Ordner kopieren,
+       "bash stop.sh" testweise ausführen.
+  [F7] SYSTEMREGEL (am 07.11.2026 live entdeckt, GH013): Das Repository erlaubt
+       ÄNDERUNGEN AN MAIN NUR PER PULL REQUEST — direkte "git push origin main"
+       werden abgelehnt. Deshalb arbeitet der Helper ("Patch zu GitHub") immer mit
+       Zweig + PR, und der Besitzer muss Korrekturen an main ebenfalls per PR fahren.
+       Lokale Commits auf main dürfen zwar gebaut werden, sind aber bis zum Merge
+       eines PRs nicht auf GitHub.
+  [F8] WORKFLOW-MERKSÄTZE (aus dem N3-Volltest):
+       a) Im PR-Fenster: Test-PRs per "Close" beenden — "Merge" nimmt sie endgültig
+          nach main. Korrekturen/Reverts dagegen WERDEN gemerged.
+       b) Zweige (lokal UND remote) erst löschen, NACHDEM auf GitHub "Merged"
+          steht — sonst wird die PR nicht mehr mergbar.
+       c) Revert eines Merge-Commits: "git revert --no-edit -m 1 <Merge-Hash>"
+          (--no-edit vermeiden, sonst öffnet sich der Editor).
+
+
+ANHANG A — TERMINAL-REZEPTE (Nur Extreme; der Normalfall ist seit 23.40 im GUI)
+==========================================================================
+A1. Zweig-Aufräumen: SEIT 23.40 GUI-Knopf „Zweige aufräumen" (Gruppe 04).
+   Terminal nur als Fallback:
+   cd ~/projekte/adventshaus
+   git fetch --prune
+   git branch --merged main | grep 'ki/' | xargs -r git branch -d
+   git branch -r --merged main | grep 'origin/ki/' | sed 's|.*origin/||' | xargs -r -I{} git push origin --delete {}
+
+A2. Incident "start.sh startet nicht" / JSON statt GUI:
+   WICHTIG: Ordner umbenennen/wegziehen WÄHREND der Helfer läuft → exakt dieser Fehler
+   (Prozess hängt am alten Pfad). Abhilfe: pkill -f projektmanager.py, dann aus dem NEUEN
+   Ordner starten. Pfade mit Leerzeichen („KI - Projektmanager") IMMER in Anführungszeichen:
+   cd "~/Schreibtisch/projektmanager-23.42"
+   ERST: dritter Desktop-Knopf „Adventshaus · Projektmanager neu starten" (neustart.sh)
+   — beendet alle Helfer und startet den aus dem Paket-Ordner.
+   Terminal nur als Fallback:
+   for p in $(pgrep -f projektmanager.py); do readlink /proc/$p/cwd; done
+   pkill -f projektmanager.py
+   pgrep -af projektmanager.py                     # muss leer sein
+   cd ~/Schreibtisch/projektmanager-23.42
+   bash start.sh
+
+A3. Stand-Check bei Zweifeln: SEIT 23.40 im GUI-Knopf „Stand prüfen" (Zeile „Abgleich: …").
+   Terminal nur für tiefergehende Diagnose (100 % lesend):
+   cd ~/projekte/adventshaus
+   git status --porcelain
+   git log --oneline -3
+   git fetch origin
+   git rev-list --left-right --count origin/main...HEAD
+   # "0 0" = identisch · "0 N" = lokal N voraus · "N M" (beide >0) = Divergenz → nichts pushen
+
+ENDE DER DATEI
