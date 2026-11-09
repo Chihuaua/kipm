@@ -1,0 +1,7 @@
+{
+  "projekt": "~/projekte/adventshaus",
+  "sicherung": "~/sicherung/adventshaus.git",
+  "kennung": "KI-B",
+  "port": 8790,
+  "spiel_url": "http://localhost:5173/"
+}
